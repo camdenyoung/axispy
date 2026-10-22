@@ -395,7 +395,7 @@ class SimpleResponse:
 @pytest.mark.parametrize('status,body,location,expected', [
     (301, b'', 'https://camera.example/axis-cgi/com/ptz.cgi', 'redirect to HTTPS'),
     (302, b'', '/login', 'check camera URL'),
-    (204, b'', None, 'Unexpected HTTP 204'),
+    (202, b'', None, 'Unexpected HTTP 202'),
     (200, b'Error: unknown parameter continuoustimeout', None, 'unknown parameter continuoustimeout'),
     (200, b'<html>Login</html>', None, 'HTML page'),
 ])
@@ -427,3 +427,29 @@ def test_camera_error_redacts_password_and_control_characters(http_camera, monke
         assert '\x1b' not in caplog.text
     finally:
         camera.close()
+
+
+def test_http_204_accepts_motion_stop_and_camera_switch(http_camera, monkeypatch, caplog):
+    url, received, handler = http_camera
+    handler.status = 204
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    cameras = [Camera(dict(name=f'J{i}', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD', channel=i), .5, 2) for i in (1, 2)]
+    try:
+        controller = Controller(cameras)
+        controller.send(STOP)  # Initial stop handshake
+        controller.send(STOP)  # Center to arm
+        controller.send((25, -30, 50))
+        assert controller.armed
+        assert controller.unavailable == set()
+        assert parse_qs(received[-1].query)['continuouspantiltmove'] == ['25,-30']
+        controller.select(1)
+        assert controller.selected == 1
+        assert not controller.armed
+        assert parse_qs(received[-2].query)['camera'] == ['1']
+        assert parse_qs(received[-1].query)['camera'] == ['2']
+        assert all(parse_qs(request.query)['continuouspantiltmove'] == ['0,0'] for request in received[-2:])
+        controller.stop()
+        assert 'unavailable' not in caplog.text
+    finally:
+        for camera in cameras:
+            camera.close()

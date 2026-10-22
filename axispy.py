@@ -148,6 +148,9 @@ class Camera:
             if target.scheme == "https" and self.url.startswith("http://"):
                 raise CameraCommandError(f"HTTP {response.status_code} redirect to HTTPS; enable HTTP on the camera or configure trusted HTTPS")
             raise CameraCommandError(f"HTTP {response.status_code} redirect; check camera URL and HTTP/HTTPS settings")
+        # Axis firmware may acknowledge PTZ commands with 204 No Content.
+        if response.status_code == 204:
+            return
         if response.status_code != 200:
             raise CameraCommandError(f"Unexpected HTTP {response.status_code} from PTZ endpoint")
         body = response.text.strip()
