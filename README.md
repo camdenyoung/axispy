@@ -2,7 +2,7 @@
 
 Control four Axis PTZ cameras from an Axis T8311 USB joystick using the cameras' VAPIX HTTP API. Pan and tilt use two joystick axes, zoom uses a third (typically the twist axis), and physical J1–J4 buttons select the camera. Only the selected camera receives movement commands.
 
-Requires Python 3.11+ and an operating system that exposes the T8311 as an SDL joystick. Linux, Windows, and macOS are supported by the dependencies, but T8311 hardware compatibility and its exact axis/button mapping must be checked on your machine. No proprietary Axis client is needed if SDL can see the joystick.
+Requires Python 3.11+ and an operating system that exposes the T8311 as an SDL joystick. Linux, Windows, and macOS are supported by the dependencies, and the mapping below was confirmed from user-supplied T8311 inspection output. Check it on your own device if behavior differs. No proprietary Axis client is needed if SDL can see the joystick.
 
 ## Install
 
@@ -18,7 +18,21 @@ axispy --list
 axispy --inspect
 ```
 
-Move each axis independently and press J1, J2, J3, J4. `--inspect` prints **zero-based SDL indices**, without contacting cameras. Copy `config.example.toml` to `config.toml`, then set `pan_axis`, `tilt_axis`, `zoom_axis`, and `camera_buttons` to your observed values. The example indices are placeholders, not a verified T8311 mapping. Adjust inversion and deadzone as needed. `device` selects the USB joystick index printed by `--list`; inspect again if device enumeration changes.
+Move each axis independently and press J1, J2, J3, J4. `--inspect` prints **zero-based SDL indices**, without contacting cameras. Copy `config.example.toml` to `config.toml`, then set `pan_axis`, `tilt_axis`, `zoom_axis`, and `camera_buttons` to your observed values. The example matches the T8311 inspection reported below. Adjust inversion and deadzone as needed. `device` selects the USB joystick index printed by `--list`; inspect again if device enumeration changes.
+
+### Confirmed T8311 mapping
+
+Reported device: `InduKey(c) AXIS T8311 Joystick`, 3 axes, 6 buttons; SDL GUID `0300455c252200000232000001010000`.
+
+| Physical control | SDL input | Configuration / behavior |
+| --- | --- | --- |
+| Left / right | Axis 0, negative / positive | `pan_axis = 0`, `invert_pan = false` |
+| Up / down | Axis 1, negative / positive | `tilt_axis = 1`, `invert_tilt = true` (VAPIX positive tilt is up) |
+| Twist left / right | Axis 2, negative / positive | `zoom_axis = 2`, `invert_zoom = false` (left zooms out, right zooms in) |
+| J1 / J2 / J3 / J4 | Buttons 0 / 1 / 2 / 3 | `camera_buttons = [0, 1, 2, 3]` |
+| L / R | Buttons 4 / 5 | Unassigned by default; optionally set `deadman_button = 4` or `5` |
+
+The trace included incidental cross-axis values up to 0.153 while moving another axis. The default deadzone is 0.18 to suppress those small unintended pan/zoom commands. Existing `config.toml` files are not overwritten: change their `deadzone` manually. Small center offsets such as +0.004 are also filtered. Axis extrema did not all reach ±1; full stick travel may therefore produce slightly less than the configured maximum speed.
 
 If no joystick appears, check local OS USB/game-controller recognition and permissions. On Linux your user needs read access to the relevant `/dev/input/event*` device; use your distribution's input-device permission mechanism. A joystick plugged into your laptop is not automatically available inside a remote cloud environment or container. USB forwarding/device passthrough must be configured separately if running there.
 
@@ -59,6 +73,6 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, shutdown retries, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. The USB mappings, real camera authentication, mechanical movement, and firmware timeout behavior require hardware validation.
+Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, shutdown retries, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. USB mappings have been confirmed from user-supplied inspection output; real camera authentication, mechanical movement, and firmware timeout behavior still require hardware validation.
 
 To develop in the cloud, use the existing checkout; no additional Git worktree is needed. `axispy --list` exercises SDL discovery even when no USB device is passed through. Run the controller itself on a host with both joystick access and camera connectivity.

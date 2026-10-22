@@ -7,11 +7,13 @@ zoom_axis = 2
 invert_pan = false
 invert_tilt = true
 invert_zoom = false
-deadzone = 0.12
+# Observed incidental cross-axis movement reached 0.153 on a T8311.
+deadzone = 0.18
 max_pan = 70
 max_tilt = 70
 max_zoom = 50
-# EXAMPLE indices only: press physical J1-J4 in --inspect and replace these.
+# Confirmed by T8311 inspection: J1=0, J2=1, J3=2, J4=3.
+# L=4 and R=5 are unassigned; either can be used as deadman_button.
 camera_buttons = [0, 1, 2, 3]
 # Optional hold-to-move button; -1 disables it.
 deadman_button = -1

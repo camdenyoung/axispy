@@ -119,7 +119,7 @@ def test_missing_credential(monkeypatch):
         Camera(dict(name='test', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
 
 
-@pytest.mark.parametrize('old,new', [('deadzone = 0.12', 'deadzone = 1.0'), ('camera_buttons = [0, 1, 2, 3]', 'camera_buttons = [0, 0, 2, 3]'), ('pan_axis = 0', 'pan_axis = -1'), ('continuous_timeout = 2', 'continuous_timeout = 0')])
+@pytest.mark.parametrize('old,new', [('deadzone = 0.18', 'deadzone = 1.0'), ('camera_buttons = [0, 1, 2, 3]', 'camera_buttons = [0, 0, 2, 3]'), ('pan_axis = 0', 'pan_axis = -1'), ('continuous_timeout = 2', 'continuous_timeout = 0')])
 def test_invalid_config(tmp_path, old, new):
     from pathlib import Path
     config = tmp_path / 'config.toml'
@@ -140,6 +140,22 @@ def test_each_camera_button_selects_corresponding_camera(index):
 
 def test_axis_mapping_and_inversion():
     joystick = Mock()
-    joystick.get_axis.side_effect = lambda index: {0: 1., 1: .56, 2: -1.}[index]
+    joystick.get_axis.side_effect = lambda index: {0: 1., 1: .59, 2: -1.}[index]
     config = Settings.load('config.example.toml').joystick
     assert read_motion(joystick, config) == (70, -35, -50)
+
+
+@pytest.mark.parametrize('axes,expected', [
+    ((-.929, .004, .004), (-64, 0, 0)),  # Left
+    ((.976, .004, .122), (68, 0, 0)),    # Right with incidental twist
+    ((.153, -.961, .027), (0, 67, 0)),  # Up with incidental pan
+    ((.129, .906, .004), (0, -62, 0)),  # Down with incidental pan
+    ((.004, .004, -.922), (0, 0, -45)), # Twist left
+    ((.004, .004, 1.), (0, 0, 50)),     # Twist right
+    ((.004, .004, .004), STOP),          # Released
+])
+def test_reported_t8311_samples(axes, expected):
+    joystick = Mock()
+    joystick.get_axis.side_effect = lambda index: axes[index]
+    config = Settings.load('config.example.toml').joystick
+    assert read_motion(joystick, config) == expected

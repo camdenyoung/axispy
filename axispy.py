@@ -51,7 +51,7 @@ class Settings:
         deadman = j.get("deadman_button", -1)
         if type(deadman) is not int or deadman < -1:
             raise ValueError("deadman_button must be -1 or a nonnegative integer")
-        if not 0 <= j.get("deadzone", .12) < 1:
+        if not 0 <= j.get("deadzone", .18) < 1:
             raise ValueError("deadzone must be between 0 (inclusive) and 1 (exclusive)")
         for axis in ("pan", "tilt", "zoom"):
             if type(j.get(f"max_{axis}", 70)) is not int or not 0 <= j.get(f"max_{axis}", 70) <= 100:
@@ -144,7 +144,7 @@ def read_motion(joystick, config):
     if config.get("deadman_button", -1) >= 0 and not joystick.get_button(config["deadman_button"]):
         return STOP
     return tuple(speed(joystick.get_axis(config[f"{axis}_axis"]),
-                       config.get("deadzone", .12), config.get(f"max_{axis}", 70),
+                       config.get("deadzone", .18), config.get(f"max_{axis}", 70),
                        config.get(f"invert_{axis}", False)) for axis in ("pan", "tilt", "zoom"))
 
 
