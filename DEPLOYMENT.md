@@ -1,0 +1,76 @@
+# Raspberry Pi deployment
+
+Recommended: Raspberry Pi OS **64-bit** (`uname -m` should print `aarch64`), with the T8311 plugged directly into the Pi and network access to all four cameras. The Pi needs no graphical desktop. Camera connectivity, USB access, and actual PTZ behavior must be tested on the Pi.
+
+## Docker Compose (recommended)
+
+Install Docker Engine and the Compose plugin using the [official Debian instructions](https://docs.docker.com/engine/install/debian/) for your OS version. Enable Docker at boot with `sudo systemctl enable --now docker`. Run these commands with an account allowed to use Docker (or prefix Docker commands with `sudo`).
+
+```sh
+git clone https://github.com/camdenyoung/axispy.git
+cd axispy
+cp .env.example .env
+chmod 600 .env
+nano .env
+```
+
+Enter the four camera URLs, usernames and passwords in `.env`. Defaults already match the reported T8311 mappings. No TOML file or virtual environment is needed. Then:
+
+```sh
+docker compose build
+docker compose run --rm axispy --list
+docker compose run --rm axispy --inspect
+# Ctrl+C to finish inspection, then:
+docker compose up -d
+docker compose logs -f
+```
+
+The container starts the controller without extra arguments, restarts after a failure (including USB disconnection), and starts again after reboot when Docker starts. Reconnect the joystick and the next restart should rediscover it. The device index may change if multiple controllers are attached; recheck `--list` and set `AXIS_DEVICE` if necessary. Initial selection is J1 on every restart and movement is inhibited until centered.
+
+Only run one controller instance at a time. Before running inspection or manual controller commands after deployment, use `docker compose down` first. A cloud machine or a Mac Docker VM does not automatically have access to the Pi's USB devices.
+
+```sh
+# Stop (sends stop commands before exiting):
+docker compose down
+# Apply .env changes:
+docker compose up -d --force-recreate
+# Update code and rebuild:
+git pull --ff-only
+docker compose up -d --build
+```
+
+The image is built locally for the Pi's architecture; no x86 image or prebuilt image download is assumed. For a TLS inspection proxy during image builds, Dockerfile accepts an optional BuildKit secret named `build_ca` containing the trusted CA PEM (for example, `docker build --secret id=build_ca,src=/path/to/ca.pem -t axispy .`). It is used only during dependency installation and is not retained in the image; TLS verification stays enabled. Standard 64-bit Raspberry Pi OS is the target. 32-bit Pi OS is not validated and may require additional build dependencies.
+
+### Device access and certificates
+
+Compose mounts `/dev/input` read-only and permits reads of Linux input devices (major 13). It does not enable privileged mode or mount all of `/dev`. The container runs as root with all Linux capabilities dropped to read root-owned input devices. The input-directory mount allows device nodes to reappear after reconnect. This grants access to other input devices on the Pi too; use a dedicated Pi where practical. Missing `/dev/input`, an unrecognized joystick, or host security policies can still prevent access; check `ls -l /dev/input` and `docker compose run --rm axispy --list`.
+
+HTTPS verification stays enabled. For a private camera CA, add a read-only certificate mount under `volumes` in `compose.yaml`, such as `./certs:/certs:ro`, and set `AXIS_J1_CA_BUNDLE=/certs/camera-ca.pem` in `.env` for each applicable camera. Camera requests go directly to the cameras and do not use ambient HTTP proxies. No inbound container ports are needed.
+
+### Environment variables
+
+Required for each `n` from 1 to 4: `AXIS_Jn_URL` and `AXIS_Jn_PASSWORD`. `AXIS_Jn_USERNAME` defaults to `operator`; `AXIS_Jn_CHANNEL` defaults to `1`; `AXIS_Jn_CA_BUNDLE` is optional. See `.env.example` for joystick and timing overrides.
+
+Passwords containing `$`, `#`, or spaces should be single-quoted in `.env`. Never commit `.env`; Docker administrators can inspect container environment variables, so restrict access to the Pi and Docker. The application never prints password values.
+
+## Standalone executable
+
+Install build prerequisites with `sudo apt-get install -y python3-venv binutils`, then build once **on the Pi** (or a machine with the same OS/architecture):
+
+```sh
+./scripts/build-binary.sh
+cp .env.example dist/.env
+chmod 600 dist/.env
+nano dist/.env
+./dist/axispy
+```
+
+`dist/axispy` bundles Python and the dependencies: launching it requires no Python installation, virtual-environment activation, TOML file, or command-line options. Keep `.env` next to the executable. It is a native executable for the machine where it was built: an x86 Linux build will not run on a Pi, and a macOS build will not run on Linux. The one-file executable extracts bundled libraries into a temporary directory at startup; that directory must allow execution. Host system libraries and USB device permissions are still required. For missing SDL libraries on Raspberry Pi OS, install `libsdl2-2.0-0` and `libglib2.0-0` using apt.
+
+The build uses a virtual environment internally, but the resulting executable does not need one to run. If launching it through systemd, use its absolute path for `ExecStart` and allow enough shutdown time for stop retries. Docker Compose already provides startup and restart management without writing a separate service.
+
+## Configuration precedence
+
+Existing process environment overrides `.env`; environment settings override TOML; built-in defaults supply the confirmed joystick mapping. Native executables load `.env` and optional `config.toml` beside the executable; source installations use the working directory. `AXISPY_ENV_FILE` can select another dotenv path, and `AXISPY_CONFIG` or `--config` can select a TOML file. Explicitly requested missing TOML files fail rather than silently falling back.
+
+The HTTP tests and container/executable smoke checks do not validate real camera movement, authentication or watchdog behavior. Complete the low-speed hardware checks in README.md before leaving the controller unattended.

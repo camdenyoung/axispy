@@ -159,3 +159,86 @@ def test_reported_t8311_samples(axes, expected):
     joystick.get_axis.side_effect = lambda index: axes[index]
     config = Settings.load('config.example.toml').joystick
     assert read_motion(joystick, config) == expected
+
+
+@pytest.fixture
+def camera_environment(monkeypatch):
+    for i in range(1, 5):
+        monkeypatch.setenv(f'AXIS_J{i}_URL', f'https://192.168.10.{i}')
+        monkeypatch.setenv(f'AXIS_J{i}_USERNAME', f'operator{i}')
+        monkeypatch.setenv(f'AXIS_J{i}_PASSWORD', 'local-test-only')
+
+
+def test_environment_only_configuration(camera_environment):
+    settings = Settings.load()
+    assert settings.joystick['camera_buttons'] == [0, 1, 2, 3]
+    assert settings.joystick['invert_tilt'] is True
+    assert settings.cameras[3]['url'] == 'https://192.168.10.4'
+    assert settings.cameras[0]['username'] == 'operator1'
+    assert settings.cameras[0]['password_env'] == 'AXIS_J1_PASSWORD'
+
+
+def test_environment_overrides_toml(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_CAMERA_BUTTONS', '3,2,1,0')
+    monkeypatch.setenv('AXIS_INVERT_ZOOM', 'true')
+    monkeypatch.setenv('AXIS_MAX_PAN', '30')
+    monkeypatch.setenv('AXIS_RATE_HZ', '5')
+    monkeypatch.setenv('AXIS_J2_CHANNEL', '2')
+    monkeypatch.setenv('AXIS_J2_CA_BUNDLE', '/certs/camera.pem')
+    settings = Settings.load('config.example.toml')
+    assert settings.joystick['camera_buttons'] == [3, 2, 1, 0]
+    assert settings.joystick['invert_zoom'] is True
+    assert settings.joystick['max_pan'] == 30
+    assert settings.rate == 5
+    assert settings.cameras[1]['channel'] == 2
+    assert settings.cameras[1]['ca_bundle'] == '/certs/camera.pem'
+
+
+@pytest.mark.parametrize('key,value', [('AXIS_INVERT_TILT', 'maybe'), ('AXIS_DEVICE', '-1'), ('AXIS_DEADZONE', '1'), ('AXIS_CAMERA_BUTTONS', '0,0,1,2'), ('AXIS_RATE_HZ', '0')])
+def test_invalid_environment(camera_environment, monkeypatch, key, value):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        Settings.load()
+
+
+def test_dotenv_preserves_existing_environment(tmp_path, monkeypatch):
+    from dotenv import load_dotenv
+    path = tmp_path / '.env'
+    path.write_text("AXIS_MAX_PAN=25\nAXIS_J1_PASSWORD='value with # and $'\n")
+    monkeypatch.setenv('AXIS_MAX_PAN', '40')
+    monkeypatch.delenv('AXIS_J1_PASSWORD', raising=False)
+    load_dotenv(path, override=False)
+    import os
+    assert os.environ['AXIS_MAX_PAN'] == '40'
+    assert os.environ['AXIS_J1_PASSWORD'] == 'value with # and $'
+
+
+def test_no_argument_launch_loads_dotenv(tmp_path, monkeypatch):
+    import axispy
+    import os
+    import sys
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv('AXISPY_ENV_FILE', raising=False)
+    monkeypatch.delenv('AXISPY_CONFIG', raising=False)
+    monkeypatch.delenv('AXIS_J1_URL', raising=False)
+    (tmp_path / '.env').write_text('AXIS_J1_URL=https://192.168.20.1\n')
+    monkeypatch.setattr(sys, 'argv', ['axispy'])
+    observed = []
+    monkeypatch.setattr(axispy, 'run', lambda args: observed.append((args.config, os.environ['AXIS_J1_URL'])))
+    assert axispy.main() == 0
+    assert observed == [(None, 'https://192.168.20.1')]
+
+
+def test_executable_loads_configuration_beside_binary(tmp_path, monkeypatch):
+    import axispy
+    import sys
+    monkeypatch.setattr(sys, 'frozen', True, raising=False)
+    monkeypatch.setattr(sys, 'executable', str(tmp_path / 'axispy'))
+    monkeypatch.setattr(sys, 'argv', ['axispy'])
+    monkeypatch.delenv('AXISPY_CONFIG', raising=False)
+    monkeypatch.delenv('AXISPY_ENV_FILE', raising=False)
+    (tmp_path / 'config.toml').write_text('')
+    observed = []
+    monkeypatch.setattr(axispy, 'run', lambda args: observed.append(args.config))
+    assert axispy.main() == 0
+    assert observed == [str(tmp_path / 'config.toml')]

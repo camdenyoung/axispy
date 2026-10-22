@@ -1,0 +1,25 @@
+services:
+  axispy:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file: ${AXISPY_ENV_FILE:-.env}
+    # Mount the directory so reconnecting USB devices can be discovered on restart.
+    volumes:
+      - /dev/input:/dev/input:ro
+    device_cgroup_rules:
+      - 'c 13:* r'
+    # Root can read root-owned input devices; no privileged mode is required.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'

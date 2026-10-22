@@ -6,12 +6,15 @@ import logging
 import math
 import os
 import signal
+import sys
 import time
 import tomllib
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import requests
+from dotenv import load_dotenv
 from requests.auth import HTTPDigestAuth
 
 LOG = logging.getLogger("axispy")
@@ -35,9 +38,44 @@ class Settings:
     continuous_timeout: int
 
     @classmethod
-    def load(cls, path: str) -> Settings:
-        with open(path, "rb") as stream:
-            data = tomllib.load(stream)
+    def load(cls, path: str | None = None) -> Settings:
+        data = {
+            "joystick": dict(device=0, pan_axis=0, tilt_axis=1, zoom_axis=2,
+                             invert_pan=False, invert_tilt=True, invert_zoom=False,
+                             deadzone=.18, max_pan=70, max_tilt=70, max_zoom=50,
+                             camera_buttons=[0, 1, 2, 3], deadman_button=-1),
+            "cameras": [dict(name=f"J{i}", url="", username="operator",
+                             password_env=f"AXIS_J{i}_PASSWORD", channel=1)
+                        for i in range(1, 5)],
+            "control": {},
+        }
+        if path:
+            with open(path, "rb") as stream:
+                file_data = tomllib.load(stream)
+            for section in ("joystick", "control"):
+                data[section].update(file_data.get(section, {}))
+            data["cameras"] = file_data.get("cameras", data["cameras"])
+        for key, default in data["joystick"].items():
+            raw = os.environ.get(f"AXIS_{key.upper()}")
+            if raw is None:
+                continue
+            if isinstance(default, bool):
+                if raw.lower() not in ("true", "false", "1", "0"):
+                    raise ValueError(f"AXIS_{key.upper()} must be true or false")
+                value = raw.lower() in ("true", "1")
+            elif isinstance(default, list):
+                value = [int(item.strip()) for item in raw.split(",")]
+            else:
+                value = type(default)(raw)
+            data["joystick"][key] = value
+        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int)):
+            if f"AXIS_{key.upper()}" in os.environ:
+                data["control"][key] = cast(os.environ[f"AXIS_{key.upper()}"])
+        for i, camera in enumerate(data["cameras"], 1):
+            for key in ("url", "username", "channel", "ca_bundle"):
+                raw = os.environ.get(f"AXIS_J{i}_{key.upper()}")
+                if raw is not None:
+                    camera[key] = int(raw) if key == "channel" else raw
         j = data["joystick"]
         cameras = data["cameras"]
         if len(cameras) != 4:
@@ -233,10 +271,17 @@ def main():
     mode.add_argument("--list", action="store_true", help="List USB/SDL joysticks without connecting to cameras")
     mode.add_argument("--inspect", action="store_true", help="Print axes and buttons to calibrate mappings; no camera traffic")
     parser.add_argument("--device", type=int, default=0, help="Device index for --inspect")
-    parser.add_argument("--config", default="config.toml")
+    parser.add_argument("--config", help="Optional TOML configuration; environment variables override it")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     try:
+        base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+        # Existing service/process environment always takes precedence over .env.
+        load_dotenv(os.environ.get("AXISPY_ENV_FILE", str(base / ".env")), override=False)
+        if args.config is None:
+            args.config = os.environ.get("AXISPY_CONFIG")
+            if args.config is None and (base / "config.toml").is_file():
+                args.config = str(base / "config.toml")
         run(args)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, requests.RequestException) as exc:
         # Avoid logging requests exception URLs, which may contain network details.

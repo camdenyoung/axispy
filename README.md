@@ -4,6 +4,10 @@ Control four Axis PTZ cameras from an Axis T8311 USB joystick using the cameras'
 
 Requires Python 3.11+ and an operating system that exposes the T8311 as an SDL joystick. Linux, Windows, and macOS are supported by the dependencies, and the mapping below was confirmed from user-supplied T8311 inspection output. Check it on your own device if behavior differs. No proprietary Axis client is needed if SDL can see the joystick.
 
+## Raspberry Pi / standalone deployment
+
+For an environment-variable-only Docker Compose deployment or a standalone executable that needs no virtual environment at runtime, see [DEPLOYMENT.md](DEPLOYMENT.md).
+
 ## Install
 
 Run on the computer physically connected to the joystick, with network access to the cameras:
