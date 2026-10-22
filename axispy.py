@@ -147,35 +147,84 @@ class Camera:
 
 
 class Controller:
-    def __init__(self, cameras):
+    def __init__(self, cameras, retry_interval=5, clock=None):
         self.cameras = cameras
         self.selected = 0
         self.armed = False
+        self.retry_interval = retry_interval
+        self.clock = clock or time.monotonic
+        self.retry_at = [0.0] * len(cameras)
+        self.unavailable = set()
+        self.failure_reason = {}
+        self.stop_required = set(range(len(cameras)))
+        # A failed response to a movement request leaves motion uncertain.
+        self.may_be_moving = set()
+
+    def _move(self, index, motion, force=False):
+        if not force and self.clock() < self.retry_at[index]:
+            return False
+        if motion != STOP:
+            self.may_be_moving.add(index)
+        try:
+            self.cameras[index].move(motion)
+        except (requests.RequestException, RuntimeError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            reason = f"HTTP {status}" if status else type(exc).__name__
+            if self.failure_reason.get(index) != reason:
+                LOG.warning("%s unavailable (%s); retrying every %ss with stop commands",
+                            self.cameras[index].name, reason, self.retry_interval)
+            self.failure_reason[index] = reason
+            self.unavailable.add(index)
+            self.stop_required.add(index)
+            self.retry_at[index] = self.clock() + self.retry_interval
+            self.armed = False
+            return False
+        if index in self.unavailable:
+            LOG.info("%s reconnected; center joystick to enable movement", self.cameras[index].name)
+        self.unavailable.discard(index)
+        self.failure_reason.pop(index, None)
+        self.retry_at[index] = 0
+        if motion == STOP:
+            self.may_be_moving.discard(index)
+            self.stop_required.discard(index)
+        return True
 
     def select(self, index):
         if index == self.selected:
             return
-        # Leave selection unchanged if stopping the previous camera fails.
-        self.cameras[self.selected].move(STOP)
-        self.selected = index
         self.armed = False
-        self.cameras[index].move(STOP)
+        stopped = self._move(self.selected, STOP)
+        if not stopped and self.selected in self.may_be_moving:
+            LOG.warning("Cannot switch: stop for %s is unconfirmed; retry after reconnection",
+                        self.cameras[self.selected].name)
+            return
+        self.selected = index
+        self.stop_required.add(index)
+        self._move(index, STOP)
         LOG.info("Selected %s; center joystick to enable movement", self.cameras[index].name)
 
     def send(self, motion):
+        if self.selected in self.stop_required:
+            self.armed = False
+            self._move(self.selected, STOP)
+            return
         if motion == STOP:
             self.armed = True
-        self.cameras[self.selected].move(motion if self.armed else STOP)
+        self._move(self.selected, motion if self.armed else STOP)
+
+    def maintain_stop(self):
+        """Retry an unconfirmed stop while waiting for USB, without arming."""
+        self.armed = False
+        if self.selected in self.stop_required:
+            self._move(self.selected, STOP)
 
     def stop(self):
         self.armed = False
         for attempt in range(3):
-            try:
-                self.cameras[self.selected].move(STOP)
+            if self._move(self.selected, STOP, force=True):
                 return
-            except (requests.RequestException, RuntimeError):
-                LOG.error("Stop attempt %d failed for %s", attempt + 1, self.cameras[self.selected].name)
-        LOG.critical("Stop unconfirmed: use camera controls to stop motion immediately")
+            LOG.error("Stop attempt %d failed for %s", attempt + 1, self.cameras[self.selected].name)
+        LOG.error("Stop unconfirmed: use camera controls if motion continues; waiting to reconnect")
 
 
 def read_motion(joystick, config):
@@ -195,74 +244,118 @@ def run(args):
     pygame.joystick.init()
     cameras = []
     controller = None
+    joystick = None
     running = True
 
     def terminate(*_):
         nonlocal running
         running = False
 
-    signal.signal(signal.SIGINT, terminate)
-    signal.signal(signal.SIGTERM, terminate)
+    previous_handlers = {sig: signal.signal(sig, terminate) for sig in (signal.SIGINT, signal.SIGTERM)}
     try:
-        count = pygame.joystick.get_count()
-        if count == 0:
-            print("No SDL joysticks detected on this machine.", flush=True)
-        for index in range(count):
-            device = pygame.joystick.Joystick(index)
-            device.init()
-            print(f"Device {index}: {device.get_name()} | axes={device.get_numaxes()} buttons={device.get_numbuttons()} GUID={device.get_guid()}", flush=True)
         if args.list:
+            count = pygame.joystick.get_count()
+            if count == 0:
+                print("No SDL joysticks detected on this machine.", flush=True)
+            for index in range(count):
+                device = pygame.joystick.Joystick(index)
+                device.init()
+                print(f"Device {index}: {device.get_name()} | axes={device.get_numaxes()} buttons={device.get_numbuttons()} GUID={device.get_guid()}", flush=True)
+                device.quit()
             return
         settings = None if args.inspect else Settings.load(args.config)
         index = args.device if args.inspect else settings.joystick.get("device", 0)
-        if index < 0 or index >= count:
-            raise ValueError("Joystick unavailable; connect USB on this machine and run --list")
-        joystick = pygame.joystick.Joystick(index)
-        joystick.init()
+        if index < 0:
+            raise ValueError("Joystick device index must be nonnegative")
         if settings:
-            j = settings.joystick
-            if max(j[f"{a}_axis"] for a in ("pan", "tilt", "zoom")) >= joystick.get_numaxes():
-                raise ValueError("Axis index out of range; run --inspect")
-            if max(*j["camera_buttons"], j.get("deadman_button", -1)) >= joystick.get_numbuttons():
-                raise ValueError("Button index out of range; run --inspect")
             for config in settings.cameras:
                 cameras.append(Camera(config, settings.timeout, settings.continuous_timeout))
             controller = Controller(cameras)
-            controller.send(STOP)
-            controller.armed = False
-            LOG.info("Selected %s; center joystick to enable movement", cameras[0].name)
+            LOG.info("Selected %s; waiting for joystick and camera readiness", cameras[0].name)
         last_motion = None
-        next_send = 0
+        next_send = next_connect = 0
+        waiting_logged = False
         while running:
             for event in pygame.event.get():
+                if joystick is None:
+                    continue
                 if event.type == pygame.JOYDEVICEREMOVED and event.instance_id == joystick.get_instance_id():
-                    raise RuntimeError("Joystick disconnected; stopping camera")
+                    LOG.warning("Joystick disconnected; stopping camera and waiting for USB")
+                    joystick.quit()
+                    joystick = None
+                    if controller:
+                        controller.stop()
+                    waiting_logged = True
+                    next_connect = time.monotonic() + 2
+                    continue
+                if getattr(event, "instance_id", None) != joystick.get_instance_id():
+                    continue
                 if args.inspect:
                     if event.type == pygame.JOYBUTTONDOWN:
                         print(f"button {event.button} pressed", flush=True)
                     elif event.type == pygame.JOYAXISMOTION:
                         print(f"axis {event.axis}: {event.value:+.3f}", flush=True)
-                elif event.type == pygame.JOYBUTTONDOWN and event.instance_id == joystick.get_instance_id():
+                elif event.type == pygame.JOYBUTTONDOWN:
                     if event.button in settings.joystick["camera_buttons"]:
                         controller.select(settings.joystick["camera_buttons"].index(event.button))
                         last_motion = None
             if not running:
                 break
+            now = time.monotonic()
+            if joystick is None and now >= next_connect:
+                next_connect = now + 2
+                candidate = None
+                try:
+                    if index < pygame.joystick.get_count():
+                        candidate = pygame.joystick.Joystick(index)
+                        candidate.init()
+                        if settings:
+                            j = settings.joystick
+                            if max(j[f"{a}_axis"] for a in ("pan", "tilt", "zoom")) >= candidate.get_numaxes():
+                                raise ValueError("Axis index out of range; run --inspect")
+                            if max(*j["camera_buttons"], j.get("deadman_button", -1)) >= candidate.get_numbuttons():
+                                raise ValueError("Button index out of range; run --inspect")
+                        joystick = candidate
+                        LOG.info("Joystick connected: %s; center joystick to enable movement", joystick.get_name())
+                        if controller:
+                            controller.armed = False
+                            controller.stop_required.add(controller.selected)
+                        waiting_logged = False
+                        last_motion = None
+                        next_send = 0
+                except pygame.error:
+                    if candidate is not None:
+                        candidate.quit()
+                if joystick is None and not waiting_logged:
+                    LOG.warning("Joystick %d unavailable; waiting for USB (checking every 2s)", index)
+                    waiting_logged = True
             if controller:
-                motion = read_motion(joystick, settings.joystick)
-                now = time.monotonic()
-                # Neutral transitions stop immediately; refresh moving commands for watchdog.
-                if now >= next_send or (motion == STOP and motion != last_motion):
-                    controller.send(motion)
-                    last_motion = motion
-                    next_send = time.monotonic() + 1 / settings.rate
-            time.sleep(.005 if controller else .02)
+                if joystick is None:
+                    controller.maintain_stop()
+                else:
+                    try:
+                        motion = read_motion(joystick, settings.joystick)
+                    except pygame.error:
+                        LOG.warning("Joystick read failed; stopping camera and waiting for USB")
+                        joystick.quit()
+                        joystick = None
+                        controller.stop()
+                        next_connect = time.monotonic() + 2
+                        waiting_logged = True
+                        continue
+                    if now >= next_send or (motion == STOP and motion != last_motion):
+                        controller.send(motion)
+                        last_motion = motion
+                        next_send = time.monotonic() + 1 / settings.rate
+            time.sleep(.005 if joystick is not None and controller else .05)
     finally:
         if controller:
             controller.stop()
         for camera in cameras:
             camera.close()
         pygame.quit()
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 def main():

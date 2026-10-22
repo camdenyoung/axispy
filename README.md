@@ -62,9 +62,11 @@ HTTPS certificates are verified. For a private camera CA, add `ca_bundle = "/abs
 
 - Start with the joystick centered. J1 is selected initially.
 - Move the stick for pan/tilt and the configured zoom axis for zoom. Speeds scale from the deadzone to the configured maximum (0–100).
-- Press J1–J4 to stop the old camera and select the corresponding camera. Center the joystick before moving the newly selected camera. If stopping the old camera fails, selection does not proceed and the program exits after retrying the stop.
+- Press J1–J4 to stop the old camera and select the corresponding camera. Center the joystick before moving the newly selected camera. An offline camera that has not been moving does not block selecting another camera. If the old camera may still be moving and its stop cannot be confirmed, selection stays on it until a stop succeeds; retry your selection after reconnection.
 - Releasing the controls sends zero-speed commands. Optionally configure `deadman_button` for hold-to-move behavior.
-- Ctrl+C, SIGTERM, detected USB disconnects, and control errors trigger stop attempts before exit. Communication errors cause the controller to exit instead of continuing with uncertain motion state.
+- With no joystick attached, the controller stays running and checks for USB every two seconds. Unplugging it triggers stop attempts and returns to waiting; reconnecting requires centering before movement.
+- Camera connection, authentication, or PTZ request failures disarm movement and retry with stop commands every five seconds. Recovery requires a successful stop and then centering before movement; held-stick commands are never replayed. Repeated identical failures log once, with new messages when the failure changes or the camera recovers.
+- Ctrl+C and SIGTERM trigger stop attempts before exit. Invalid configuration still fails at startup so it can be corrected.
 
 Moving commands are refreshed at `rate_hz` (10 by default). Each HTTP operation has bounded connect/read timeouts; an unresponsive camera can delay polling and button handling. This is a small synchronous controller, not a hard real-time control system.
 
@@ -77,6 +79,6 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, shutdown retries, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. USB mappings have been confirmed from user-supplied inspection output; real camera authentication, mechanical movement, and firmware timeout behavior still require hardware validation.
+Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, shutdown retries, outage backoff, USB reconnects, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. USB mappings have been confirmed from user-supplied inspection output; real camera authentication, mechanical movement, and firmware timeout behavior still require hardware validation.
 
 To develop in the cloud, use the existing checkout; no additional Git worktree is needed. `axispy --list` exercises SDL discovery even when no USB device is passed through. Run the controller itself on a host with both joystick access and camera connectivity.

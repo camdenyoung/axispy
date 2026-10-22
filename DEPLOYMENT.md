@@ -25,7 +25,9 @@ docker compose up -d
 docker compose logs -f
 ```
 
-The container starts the controller without extra arguments, restarts after a failure (including USB disconnection), and starts again after reboot when Docker starts. Reconnect the joystick and the next restart should rediscover it. The device index may change if multiple controllers are attached; recheck `--list` and set `AXIS_DEVICE` if necessary. Initial selection is J1 on every restart and movement is inhibited until centered.
+The container starts the controller without extra arguments and stays running when USB or a camera is unavailable. It checks for the joystick every two seconds, retries failed camera operations with stop commands every five seconds, and requires centering after reconnection. Docker restarts the container only if the process exits unexpectedly; it also starts again after reboot when Docker starts. The device index may change if multiple controllers are attached; recheck `--list` and set `AXIS_DEVICE` if necessary. Initial selection is J1 on process startup. The selected camera is preserved across USB and camera reconnects. Movement is inhibited until centered. If an offline camera has not been moving, J1–J4 can select another camera; if its previous movement or stop is uncertain, switching is blocked until a stop is confirmed.
+
+Logs report waiting, failure reasons (including HTTP status), and reconnection without logging passwords or repeating identical failures on every poll. Invalid configuration or missing required password variables still fail at startup; these must be corrected in `.env` before deployment.
 
 Only run one controller instance at a time. Before running inspection or manual controller commands after deployment, use `docker compose down` first. A cloud machine or a Mac Docker VM does not automatically have access to the Pi's USB devices.
 

@@ -29,6 +29,7 @@ def test_camera_switch_stops_old_and_requires_neutral():
     cameras = [Mock() for _ in range(4)]
     controller = Controller(cameras)
     controller.send(STOP)
+    controller.send(STOP)
     controller.send((50, 0, 0))
     cameras[0].move.assert_called_with((50, 0, 0))
     controller.select(3)
@@ -40,13 +41,16 @@ def test_camera_switch_stops_old_and_requires_neutral():
     cameras[3].move.assert_called_with((0, -50, 20))
 
 
-def test_failed_stop_prevents_selection():
+def test_failed_stop_prevents_selection_when_motion_is_uncertain():
     cameras = [Mock() for _ in range(4)]
-    cameras[0].move.side_effect = requests.Timeout()
     controller = Controller(cameras)
-    with pytest.raises(requests.Timeout):
-        controller.select(1)
+    controller.send(STOP)
+    controller.send(STOP)
+    controller.send((50, 0, 0))
+    cameras[0].move.side_effect = requests.Timeout()
+    controller.select(1)
     assert controller.selected == 0
+    assert not controller.armed
     cameras[1].move.assert_not_called()
 
 
@@ -242,3 +246,143 @@ def test_executable_loads_configuration_beside_binary(tmp_path, monkeypatch):
     monkeypatch.setattr(axispy, 'run', lambda args: observed.append(args.config))
     assert axispy.main() == 0
     assert observed == [str(tmp_path / 'config.toml')]
+
+
+
+def test_offline_camera_retries_at_interval_and_recovers_safely():
+    now = [0.]
+    cameras = [Mock() for _ in range(4)]
+    cameras[0].move.side_effect = [requests.ConnectionError(), None, None, None, None]
+    controller = Controller(cameras, clock=lambda: now[0])
+    controller.send(STOP)
+    for _ in range(100):
+        controller.send((50, 0, 0))
+    assert cameras[0].move.call_count == 1
+    now[0] = 5
+    controller.send((50, 0, 0))
+    cameras[0].move.assert_called_with(STOP)
+    assert not controller.armed
+    controller.send((50, 0, 0))
+    cameras[0].move.assert_called_with(STOP)
+    controller.send(STOP)
+    controller.send((50, 0, 0))
+    cameras[0].move.assert_called_with((50, 0, 0))
+
+
+def test_offline_idle_camera_does_not_block_other_cameras():
+    cameras = [Mock() for _ in range(4)]
+    cameras[0].move.side_effect = requests.Timeout()
+    controller = Controller(cameras)
+    controller.send(STOP)
+    controller.select(1)
+    assert controller.selected == 1
+    controller.send(STOP)
+    controller.send((0, 25, 0))
+    cameras[1].move.assert_called_with((0, 25, 0))
+
+
+def test_failed_movement_response_requires_stop_before_any_more_motion():
+    now = [0.]
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras, clock=lambda: now[0])
+    controller.send(STOP)
+    controller.send(STOP)
+    cameras[0].move.side_effect = requests.Timeout()
+    controller.send((30, 0, 0))
+    assert 0 in controller.may_be_moving
+    assert not controller.armed
+    controller.select(1)
+    assert controller.selected == 0
+    cameras[0].move.side_effect = None
+    now[0] = 5
+    controller.send((30, 0, 0))
+    cameras[0].move.assert_called_with(STOP)
+    assert 0 not in controller.may_be_moving
+    assert not controller.armed
+    controller.select(1)
+    assert controller.selected == 1
+
+
+def test_missing_joystick_stop_retry_does_not_arm_or_spam(caplog):
+    now = [0.]
+    camera = Mock()
+    camera.move.side_effect = requests.Timeout()
+    controller = Controller([camera], clock=lambda: now[0])
+    for _ in range(100):
+        controller.maintain_stop()
+    assert camera.move.call_count == 1
+    assert len(caplog.records) == 1
+    now[0] = 5
+    camera.move.side_effect = None
+    controller.maintain_stop()
+    assert camera.move.call_count == 2
+    assert not controller.armed
+    controller.maintain_stop()
+    assert camera.move.call_count == 2
+
+
+@pytest.mark.parametrize('disconnect_via_read', [False, True])
+def test_usb_wait_connect_disconnect_and_reconnect(camera_environment, monkeypatch, caplog, disconnect_via_read):
+    import axispy
+    import signal
+    import sys
+    from types import SimpleNamespace
+    clock = [0.]
+    frame = [0]
+    fake = Mock()
+    fake.error = type('SDLError', (Exception,), {})
+    fake.JOYDEVICEREMOVED = 1
+    fake.JOYBUTTONDOWN = 2
+    fake.JOYAXISMOTION = 3
+    device = Mock()
+    device.get_numaxes.return_value = 3
+    device.get_numbuttons.return_value = 6
+    device.get_instance_id.return_value = 42
+    def axis_value(_):
+        if disconnect_via_read and frame[0] == 6:
+            raise fake.error('Device disconnected')
+        return 0. if frame[0] <= 4 else .8
+    device.get_axis.side_effect = axis_value
+    fake.joystick.Joystick.return_value = device
+    fake.joystick.get_count.side_effect = lambda: int(clock[0] >= 2)
+    handlers = {}
+    monkeypatch.setattr(signal, 'signal', lambda sig, handler: handlers.setdefault(sig, handler))
+    def events():
+        frame[0] += 1
+        if frame[0] == 4:
+            return [SimpleNamespace(type=999)]  # Unrelated SDL events have no instance ID.
+        if frame[0] == 6 and not disconnect_via_read:
+            return [SimpleNamespace(type=1, instance_id=42)]
+        if frame[0] == 10:
+            handlers[signal.SIGTERM]()
+        return []
+    fake.event.get.side_effect = events
+    monkeypatch.setitem(sys.modules, 'pygame', fake)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(axispy.time, 'sleep', lambda _: clock.__setitem__(0, clock[0] + 1))
+    cameras = [Mock() for _ in range(4)]
+    monkeypatch.setattr(axispy, 'Camera', Mock(side_effect=cameras))
+    axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
+    assert fake.joystick.Joystick.call_count == 2
+    assert device.quit.call_count == 1
+    assert 'waiting for USB' in caplog.text
+    for camera in cameras:
+        camera.close.assert_called_once()
+    sent = [call.args[0] for call in cameras[0].move.call_args_list]
+    moving = [i for i, motion in enumerate(sent) if motion != STOP]
+    assert len(moving) == 1  # Movement before unplug; held stick must not resume afterward.
+    assert all(motion == STOP for motion in sent[moving[0] + 1:])
+
+
+def test_camera_outage_logged_without_request_credentials(caplog):
+    camera = Mock()
+    camera.move.side_effect = requests.HTTPError('do not log secret URL', response=SimpleResponse(401))
+    controller = Controller([camera])
+    controller.send(STOP)
+    assert 'HTTP 401' in caplog.text
+    assert 'secret URL' not in caplog.text
+
+
+class SimpleResponse:
+    def __init__(self, status_code):
+        self.status_code = status_code

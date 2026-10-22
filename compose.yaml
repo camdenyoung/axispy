@@ -4,7 +4,7 @@ services:
     restart: unless-stopped
     init: true
     env_file: ${AXISPY_ENV_FILE:-.env}
-    # Mount the directory so reconnecting USB devices can be discovered on restart.
+    # Mount the directory so USB reconnects are visible without restarting.
     volumes:
       - /dev/input:/dev/input:ro
     device_cgroup_rules:
