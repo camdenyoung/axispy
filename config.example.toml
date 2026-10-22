@@ -1,0 +1,52 @@
+# Copy to config.toml. Discover actual SDL indices with: axispy --inspect
+[joystick]
+device = 0
+pan_axis = 0
+tilt_axis = 1
+zoom_axis = 2
+invert_pan = false
+invert_tilt = true
+invert_zoom = false
+deadzone = 0.12
+max_pan = 70
+max_tilt = 70
+max_zoom = 50
+# EXAMPLE indices only: press physical J1-J4 in --inspect and replace these.
+camera_buttons = [0, 1, 2, 3]
+# Optional hold-to-move button; -1 disables it.
+deadman_button = -1
+
+[control]
+rate_hz = 10
+# Connect and read timeouts per HTTP operation, in seconds.
+timeout = 0.5
+# Camera-side motion watchdog; requires camera support. See README.
+continuous_timeout = 2
+
+[[cameras]]
+name = "J1"
+url = "https://192.168.1.101"
+username = "operator"
+password_env = "AXIS_J1_PASSWORD"
+channel = 1
+
+[[cameras]]
+name = "J2"
+url = "https://192.168.1.102"
+username = "operator"
+password_env = "AXIS_J2_PASSWORD"
+channel = 1
+
+[[cameras]]
+name = "J3"
+url = "https://192.168.1.103"
+username = "operator"
+password_env = "AXIS_J3_PASSWORD"
+channel = 1
+
+[[cameras]]
+name = "J4"
+url = "https://192.168.1.104"
+username = "operator"
+password_env = "AXIS_J4_PASSWORD"
+channel = 1
