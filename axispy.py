@@ -112,6 +112,10 @@ class Settings:
         return cls(j, cameras, rate, timeout, watchdog)
 
 
+class CameraCommandError(RuntimeError):
+    """A camera response suitable for reporting without request credentials."""
+
+
 class Camera:
     def __init__(self, config: dict, timeout: float, watchdog: int):
         password = os.environ.get(config["password_env"])
@@ -139,8 +143,22 @@ class Camera:
             "continuoustimeout": self.watchdog,
         }, timeout=self.timeout, allow_redirects=False)
         response.raise_for_status()
-        if response.status_code != 200 or response.text.strip().lower().startswith("error"):
-            raise RuntimeError(f"{self.name}: camera rejected PTZ command")
+        if 300 <= response.status_code < 400:
+            target = urlsplit(response.headers.get("Location", ""))
+            if target.scheme == "https" and self.url.startswith("http://"):
+                raise CameraCommandError(f"HTTP {response.status_code} redirect to HTTPS; enable HTTP on the camera or configure trusted HTTPS")
+            raise CameraCommandError(f"HTTP {response.status_code} redirect; check camera URL and HTTP/HTTPS settings")
+        if response.status_code != 200:
+            raise CameraCommandError(f"Unexpected HTTP {response.status_code} from PTZ endpoint")
+        body = response.text.strip()
+        if body.lower().startswith("error"):
+            # Redact before truncating/normalizing; never report raw request URLs.
+            detail = body.replace(self.session.auth.password, "[redacted]")
+            detail = " ".join(detail.split())
+            detail = "".join(char for char in detail if char.isprintable())[:240]
+            raise CameraCommandError(f"PTZ command rejected: {detail}")
+        if body.lower().startswith(("<!doctype html", "<html")):
+            raise CameraCommandError("PTZ endpoint returned an HTML page; check camera URL, authentication and PTZ support")
 
     def close(self):
         self.session.close()
@@ -169,7 +187,7 @@ class Controller:
             self.cameras[index].move(motion)
         except (requests.RequestException, RuntimeError) as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            reason = f"HTTP {status}" if status else type(exc).__name__
+            reason = str(exc) if isinstance(exc, CameraCommandError) else (f"HTTP {status}" if status else type(exc).__name__)
             if self.failure_reason.get(index) != reason:
                 LOG.warning("%s unavailable (%s); retrying every %ss with stop commands",
                             self.cameras[index].name, reason, self.retry_interval)

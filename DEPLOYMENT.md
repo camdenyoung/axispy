@@ -55,6 +55,10 @@ Required for each `n` from 1 to 4: `AXIS_Jn_URL` and `AXIS_Jn_PASSWORD`. `AXIS_J
 
 Passwords containing `$`, `#`, or spaces should be single-quoted in `.env`. Never commit `.env`; Docker administrators can inspect container environment variables, so restrict access to the Pi and Docker. The application never prints password values.
 
+## Diagnosing camera responses
+
+Run `docker compose logs --tail=100 -f axispy`. A `redirect to HTTPS` message means the camera's HTTP endpoint redirects rather than accepting the command: enable HTTP in the camera's settings or configure HTTPS with a trusted certificate. A `PTZ command rejected: Error: ...` message includes the camera's VAPIX rejection text; check the named parameter, PTZ capabilities, selected channel, and user permissions. The controller does not automatically follow redirects. HTTP 401/403 indicate authentication/authorization failures. Response error details are bounded and the configured password is redacted.
+
 ## Standalone executable
 
 Install build prerequisites with `sudo apt-get install -y python3-venv binutils`, then build once **on the Pi** (or a machine with the same OS/architecture):

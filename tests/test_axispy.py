@@ -68,9 +68,13 @@ def http_camera():
     received = []
     class Handler(BaseHTTPRequestHandler):
         body = b''
+        status = 200
+        location = None
         def do_GET(self):
             received.append(urlsplit(self.path))
-            self.send_response(200)
+            self.send_response(self.status)
+            if self.location:
+                self.send_header("Location", self.location)
             self.end_headers()
             self.wfile.write(self.body)
         def log_message(self, *_):
@@ -386,3 +390,40 @@ def test_camera_outage_logged_without_request_credentials(caplog):
 class SimpleResponse:
     def __init__(self, status_code):
         self.status_code = status_code
+
+
+@pytest.mark.parametrize('status,body,location,expected', [
+    (301, b'', 'https://camera.example/axis-cgi/com/ptz.cgi', 'redirect to HTTPS'),
+    (302, b'', '/login', 'check camera URL'),
+    (204, b'', None, 'Unexpected HTTP 204'),
+    (200, b'Error: unknown parameter continuoustimeout', None, 'unknown parameter continuoustimeout'),
+    (200, b'<html>Login</html>', None, 'HTML page'),
+])
+def test_camera_response_reason_reaches_logs(http_camera, monkeypatch, caplog, status, body, location, expected):
+    url, received, handler = http_camera
+    handler.status, handler.body, handler.location = status, body, location
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    try:
+        controller = Controller([camera])
+        controller.send(STOP)
+        assert expected in caplog.text
+        assert not controller.armed
+        assert len(received) == 1  # Redirects must not silently change transport.
+    finally:
+        camera.close()
+
+
+def test_camera_error_redacts_password_and_control_characters(http_camera, monkeypatch, caplog):
+    url, _, handler = http_camera
+    password = 'private-test-password'
+    handler.body = f'Error: {password}\n\x1b[31m unavailable'.encode()
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', password)
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    try:
+        Controller([camera]).send(STOP)
+        assert password not in caplog.text
+        assert '[redacted]' in caplog.text
+        assert '\x1b' not in caplog.text
+    finally:
+        camera.close()
