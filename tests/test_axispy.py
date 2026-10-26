@@ -71,13 +71,21 @@ def http_camera():
         body = b''
         status = 200
         location = None
+        focus_delay = 0
         def do_GET(self):
             received.append(urlsplit(self.path))
+            focus = parse_qs(urlsplit(self.path).query).get('continuousfocusmove', ['0'])[0]
+            if self.focus_delay and focus != '0':
+                import time
+                time.sleep(self.focus_delay)
             self.send_response(self.status)
             if self.location:
                 self.send_header("Location", self.location)
             self.end_headers()
-            self.wfile.write(self.body)
+            try:
+                self.wfile.write(self.body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # A timeout test deliberately closes a delayed response.
         def log_message(self, *_):
             pass
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -642,7 +650,7 @@ def test_autofocus_http_stops_manual_focus_before_enabling(http_camera, monkeypa
         assert params[-2] == {'camera': ['3'], 'continuousfocusmove': ['0']}
         assert params[-1] == {'camera': ['3'], 'autofocus': ['on']}
         assert not camera.focus_active
-        camera.move((20, 0, 0, 0))
+        camera.move((21, 0, 0, 0))  # Changed PTZ must preserve autofocus.
         assert 'autofocus' not in parse_qs(received[-1].query)
     finally:
         camera.close()
@@ -742,3 +750,128 @@ def test_runtime_camera_hold_enables_autofocus_once_and_suppresses_held_manual_f
     for i, camera in enumerate(cameras):
         if i != index:
             camera.enable_autofocus.assert_not_called()
+
+
+
+@pytest.mark.parametrize('direction', [-30, 30])
+def test_held_focus_coalesces_requests_and_disables_autofocus_only_once(http_camera, monkeypatch, direction):
+    url, received, _ = http_camera
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    now = [0.]
+    camera.clock = lambda: now[0]
+    try:
+        camera.move((0, 0, 0, direction))
+        for tick in range(1, 10):
+            now[0] = tick / 10
+            camera.move((0, 0, 0, direction))
+        params = [parse_qs(request.query) for request in received]
+        assert len(params) == 2  # Initial command, then one watchdog refresh at 0.5s.
+        assert params[0]['autofocus'] == ['off']
+        assert 'autofocus' not in params[1]
+        assert all(item['continuousfocusmove'] == [str(direction)] for item in params)
+        now[0] = .91
+        camera.move((0, 0, 0, 0))
+        assert parse_qs(received[-1].query)['continuousfocusmove'] == ['0']
+        camera.move((0, 0, 0, direction))
+        assert parse_qs(received[-1].query)['autofocus'] == ['off']  # A fresh press.
+    finally:
+        camera.close()
+
+
+def test_changed_ptz_does_not_repeat_focus_or_autofocus_writes(http_camera, monkeypatch):
+    url, received, _ = http_camera
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    now = [0.]
+    camera.clock = lambda: now[0]
+    try:
+        camera.move((0, 0, 0, 30))
+        now[0] = .1
+        camera.move((20, 0, 0, 30))
+        params = parse_qs(received[-1].query)
+        assert params['continuouspantiltmove'] == ['20,0']
+        assert 'continuousfocusmove' not in params
+        assert 'autofocus' not in params
+        now[0] = .2
+        camera.move((20, 0, 0, -30))  # Reversal bypasses the refresh interval.
+        assert parse_qs(received[-1].query)['continuousfocusmove'] == ['-30']
+    finally:
+        camera.close()
+
+
+def test_slow_focus_response_uses_longer_read_timeout(http_camera, monkeypatch):
+    url, received, handler = http_camera
+    handler.focus_delay = .65
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .1, 2)
+    try:
+        controller = Controller([camera])
+        controller.send(STOP)
+        controller.send(STOP)
+        controller.send((0, 0, 0, 30))
+        assert controller.unavailable == set()
+        assert controller.armed
+        assert parse_qs(received[-1].query)['continuousfocusmove'] == ['30']
+        controller.send(STOP)
+        assert parse_qs(received[-1].query)['continuousfocusmove'] == ['0']
+    finally:
+        camera.close()
+
+
+def test_focus_read_timeout_attempts_stop_without_waiting_for_backoff(http_camera, monkeypatch):
+    url, received, handler = http_camera
+    handler.focus_delay = .3
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .1, 2, focus_timeout=.1)
+    try:
+        controller = Controller([camera])
+        controller.send(STOP)
+        controller.send(STOP)
+        controller.send((0, 0, 0, 30))
+        assert not controller.armed
+        assert not controller.may_be_moving
+        assert controller.unavailable == set()  # Immediate stop was acknowledged.
+        assert parse_qs(received[-1].query)['continuousfocusmove'] == ['0']
+        controller.send((0, 0, 0, 30))
+        assert parse_qs(received[-1].query).get('continuousfocusmove') != ['30']
+    finally:
+        camera.close()
+
+
+def test_failed_stop_after_read_timeout_retains_backoff():
+    now = [0.]
+    camera = Mock()
+    controller = Controller([camera], clock=lambda: now[0])
+    controller.send(STOP)
+    controller.send(STOP)
+    camera.move.side_effect = [requests.ReadTimeout(), requests.ConnectionError()]
+    controller.send((0, 0, 0, 30))
+    assert camera.move.call_args_list[-1].args == (STOP,)
+    assert 0 in controller.stop_required
+    assert 0 in controller.may_be_moving
+    assert controller.retry_at[0] == 5
+    assert not controller.armed
+
+
+def test_focus_timeout_from_environment(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_FOCUS_TIMEOUT', '3')
+    assert Settings.load().focus_timeout == 3
+    monkeypatch.setenv('AXIS_FOCUS_TIMEOUT', '0')
+    with pytest.raises(ValueError, match='focus_timeout'):
+        Settings.load()
+
+
+def test_waiting_for_neutral_after_timeout_does_not_flood_stops(caplog):
+    camera = Mock()
+    controller = Controller([camera])
+    controller.send(STOP)
+    controller.send(STOP)
+    camera.move.side_effect = [requests.ReadTimeout(), None]
+    controller.send((0, 0, 0, 30))
+    camera.move.reset_mock()
+    for _ in range(100):
+        controller.send((0, 0, 0, 30))
+    camera.move.assert_not_called()
+    assert 'stop confirmed' in caplog.text
+    assert 'unavailable' not in caplog.text

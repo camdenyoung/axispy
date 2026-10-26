@@ -36,6 +36,7 @@ class Settings:
     rate: float
     timeout: float
     continuous_timeout: int
+    focus_timeout: float = 2.0
 
     @classmethod
     def load(cls, path: str | None = None) -> Settings:
@@ -69,7 +70,7 @@ class Settings:
             else:
                 value = type(default)(raw)
             data["joystick"][key] = value
-        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int)):
+        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int), ("focus_timeout", float)):
             if f"AXIS_{key.upper()}" in os.environ:
                 data["control"][key] = cast(os.environ[f"AXIS_{key.upper()}"])
         for i, camera in enumerate(data["cameras"], 1):
@@ -106,8 +107,11 @@ class Settings:
         c = data.get("control", {})
         rate, timeout = float(c.get("rate_hz", 10)), float(c.get("timeout", .5))
         watchdog = c.get("continuous_timeout", 2)
+        focus_timeout = float(c.get("focus_timeout", 2))
         if not .5 <= rate <= 50 or not .1 <= timeout <= 10:
             raise ValueError("rate_hz must be 0.5-50; timeout must be 0.1-10 seconds")
+        if not .1 <= focus_timeout <= 10:
+            raise ValueError("focus_timeout must be 0.1-10 seconds")
         if type(watchdog) is not int or not 1 <= watchdog <= 300:
             raise ValueError("continuous_timeout must be an integer from 1 to 300 seconds")
         for camera in cameras:
@@ -118,7 +122,7 @@ class Settings:
                 raise ValueError("Each camera needs username and password_env")
             if type(camera.get("channel", 1)) is not int or camera.get("channel", 1) < 1:
                 raise ValueError("Camera channel must be a positive integer")
-        return cls(j, cameras, rate, timeout, watchdog)
+        return cls(j, cameras, rate, timeout, watchdog, focus_timeout)
 
 
 class CameraCommandError(RuntimeError):
@@ -126,7 +130,7 @@ class CameraCommandError(RuntimeError):
 
 
 class Camera:
-    def __init__(self, config: dict, timeout: float, watchdog: int):
+    def __init__(self, config: dict, timeout: float, watchdog: int, focus_timeout: float = 2):
         password = os.environ.get(config["password_env"])
         if not password:
             raise ValueError(f"Set {config['password_env']} before starting")
@@ -136,6 +140,12 @@ class Camera:
         self.timeout = timeout
         self.watchdog = watchdog
         self.focus_active = False
+        self.focus_timeout = max(timeout, focus_timeout)
+        self.last_ptz = None
+        self.last_focus = None
+        self.ptz_sent_at = self.focus_sent_at = 0.
+        self.refresh_interval = min(.5, watchdog / 2)
+        self.clock = time.monotonic
         self.session = requests.Session()
         self.session.auth = HTTPDigestAuth(config["username"], password)
         # Do not route local camera credentials through ambient HTTP proxies.
@@ -146,32 +156,50 @@ class Camera:
 
     def move(self, motion: tuple[int, int, int, int]):
         pan, tilt, zoom, focus = motion
+        now = self.clock()
+        ptz = (pan, tilt, zoom)
+        ptz_due = (ptz != self.last_ptz or motion == STOP
+                   or (any(ptz) and now - self.ptz_sent_at >= self.refresh_interval))
+        focus_due = ((focus != 0 and (not self.focus_active or focus != self.last_focus
+                                     or now - self.focus_sent_at >= self.refresh_interval))
+                     or (focus == 0 and self.focus_active))
+        if not ptz_due and not focus_due:
+            return
         params = {
             "camera": self.channel,
             "continuouspantiltmove": f"{pan},{tilt}",
             "continuouszoommove": str(zoom),
             "continuoustimeout": self.watchdog,
         }
-        # Avoid requiring focus support for cameras used only for pan/tilt/zoom.
-        if focus or self.focus_active:
+        if focus_due:
             params["continuousfocusmove"] = str(focus)
-            if focus:
+            if focus and not self.focus_active:
                 params["autofocus"] = "off"
             # Set before the request: even a lost response needs a focus stop.
-            self.focus_active = True
-        self._request(params)
-        if focus == 0:
-            self.focus_active = False
+            if focus:
+                self.focus_active = True
+        try:
+            self._request(params, read_timeout=self.focus_timeout if focus_due else None)
+        except (requests.RequestException, RuntimeError):
+            self.last_ptz = self.last_focus = None
+            raise
+        self.last_ptz = ptz
+        self.ptz_sent_at = self.clock()
+        if focus_due:
+            self.focus_active = focus != 0
+            self.last_focus = focus
+            self.focus_sent_at = self.clock()
 
     def enable_autofocus(self):
         if self.focus_active:
-            self._request({"camera": self.channel, "continuousfocusmove": "0"})
+            self._request({"camera": self.channel, "continuousfocusmove": "0"}, read_timeout=self.focus_timeout)
             self.focus_active = False
-        self._request({"camera": self.channel, "autofocus": "on"})
+            self.last_focus = 0
+        self._request({"camera": self.channel, "autofocus": "on"}, read_timeout=self.focus_timeout)
 
-    def _request(self, params):
+    def _request(self, params, read_timeout=None):
         response = self.session.get(self.url, params=params,
-                                    timeout=self.timeout, allow_redirects=False)
+                                    timeout=(self.timeout, read_timeout or self.timeout), allow_redirects=False)
         response.raise_for_status()
         if 300 <= response.status_code < 400:
             target = urlsplit(response.headers.get("Location", ""))
@@ -218,6 +246,25 @@ class Controller:
             self.may_be_moving.add(index)
         try:
             self.cameras[index].move(motion)
+        except requests.ReadTimeout as exc:
+            self.armed = False
+            self.stop_required.add(index)
+            if motion != STOP or index in self.may_be_moving:
+                # The camera may have executed a request whose reply was lost.
+                # Try one stop immediately, rather than waiting out the backoff.
+                try:
+                    self.cameras[index].move(STOP)
+                except (requests.RequestException, RuntimeError) as stop_exc:
+                    return self._failed(index, stop_exc)
+                else:
+                    self.unavailable.discard(index)
+                    self.failure_reason.pop(index, None)
+                    self.retry_at[index] = 0
+                    self.stop_required.discard(index)
+                    self.may_be_moving.discard(index)
+                    LOG.warning("%s command response timed out; stop confirmed. Center joystick and release focus buttons before resuming", self.cameras[index].name)
+                return False
+            return self._failed(index, exc)
         except (requests.RequestException, RuntimeError) as exc:
             return self._failed(index, exc)
         if index in self.unavailable:
@@ -274,6 +321,10 @@ class Controller:
         if self.selected in self.stop_required:
             self.armed = False
             self._move(self.selected, STOP)
+            return
+        if not self.armed and (motion != STOP or not neutral):
+            # A stop is already confirmed; do not flood the camera while
+            # waiting for the operator to release/center the controls.
             return
         if motion == STOP and neutral:
             self.armed = True
@@ -373,7 +424,7 @@ def run(args):
             raise ValueError("Joystick device index must be nonnegative")
         if settings:
             for config in settings.cameras:
-                cameras.append(Camera(config, settings.timeout, settings.continuous_timeout))
+                cameras.append(Camera(config, settings.timeout, settings.continuous_timeout, settings.focus_timeout))
             controller = Controller(cameras)
             LOG.info("Selected %s; waiting for joystick and camera readiness", cameras[0].name)
         holds = CameraButtonHolds()
@@ -467,7 +518,10 @@ def run(args):
                         motion = (*motion[:3], 0)
                         if focus_released:
                             manual_focus_blocked = False
-                    if (now >= next_send or (motion == STOP and motion != last_motion)
+                    refresh_needed = (motion != STOP or controller.selected in controller.stop_required
+                                      or not controller.armed)
+                    if ((now >= next_send and refresh_needed)
+                            or (motion == STOP and motion != last_motion)
                             or (last_motion is not None and motion[3] != last_motion[3])):
                         controller.send(motion, neutral=focus_released)
                         last_motion = motion

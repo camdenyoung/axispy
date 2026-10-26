@@ -43,6 +43,10 @@ docker compose up -d --build
 
 The image is built locally for the Pi's architecture; no x86 image or prebuilt image download is assumed. For a TLS inspection proxy during image builds, Dockerfile accepts an optional BuildKit secret named `build_ca` containing the trusted CA PEM (for example, `docker build --secret id=build_ca,src=/path/to/ca.pem -t axispy .`). It is used only during dependency installation and is not retained in the image; TLS verification stays enabled. Standard 64-bit Raspberry Pi OS is the target. 32-bit Pi OS is not validated and may require additional build dependencies.
 
+### Slow focus responses
+
+Focus commands default to a 2-second response timeout, while the connection/PTZ timeout remains 0.5 seconds. Set `AXIS_FOCUS_TIMEOUT=3.0` in `.env` for a slower camera (range 0.1–10 seconds); the effective focus read timeout is never shorter than `AXIS_TIMEOUT`. Recreate the container to apply `.env` changes. Identical held-focus requests are coalesced with watchdog refreshes twice per second, and autofocus is disabled once per focus hold. Release/reversal requests are sent immediately; a synchronous HTTP request already in progress can still delay polling until its timeout. A `ReadTimeout` means a response did not arrive in time; it does not prove the camera rebooted or lost its network connection. After a timed-out movement, the controller attempts a stop immediately and requires centering/releasing controls before resuming. A failed stop retains the normal reconnect backoff.
+
 ### Device access and certificates
 
 Compose mounts `/dev/input` read-only and permits reads of Linux input devices (major 13). It does not enable privileged mode or mount all of `/dev`. The container runs as root with all Linux capabilities dropped to read root-owned input devices. The input-directory mount allows device nodes to reappear after reconnect. This grants access to other input devices on the Pi too; use a dedicated Pi where practical. Missing `/dev/input`, an unrecognized joystick, or host security policies can still prevent access; check `ls -l /dev/input` and `docker compose run --rm axispy --list`.
