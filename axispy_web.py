@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import threading
+import time
 from urllib.parse import parse_qs, quote, quote_plus, urlsplit
 
 import requests
@@ -43,18 +44,22 @@ class LiveLogs(logging.Handler):
 
 
 class Dashboard:
-    def __init__(self, configs, controller, host="127.0.0.1", port=8080, timeout=.5, interval=5):
+    def __init__(self, configs, controller, host="127.0.0.1", port=8080, timeout=.5, interval=5, clock=None):
         self.configs = configs
         self.controller = controller
         self.host, self.port = host, port
-        self.timeout = (min(timeout, .5), min(timeout, 2))
+        self.timeout = (min(timeout, 2), min(timeout, 2))
         self.interval = interval
+        self.clock = clock or time.monotonic
+        self.last_success = [None] * len(configs)
+        self.offline_threshold = 3
+        self.offline_grace = 15
         self.guard = threading.Lock()
         self.finished = threading.Event()
         self.joystick = None
         self.command_revision = [0] * len(configs)
         self.states = [dict(id=i, name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
-                            checked_at=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None)
+                            checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None)
                        for i, c in enumerate(configs)]
         self.logger = logging.getLogger("axispy")
         self.logs = LiveLogs([os.environ.get(c["password_env"], "") for c in configs])
@@ -65,11 +70,22 @@ class Dashboard:
         with self.guard:
             self.joystick = name
 
+    def _reachable(self, index):
+        state = self.states[index]
+        self.last_success[index] = self.clock()
+        state.update(online=True, checked_at=timestamp(), last_seen=timestamp(),
+                     consecutive_failures=0, status_note=None)
+
     def command_result(self, index, online, focus=None):
         with self.guard:
-            self.command_revision[index] += 1
             state = self.states[index]
-            state.update(online=online, checked_at=timestamp(), error=None if online else "Control request failed")
+            if not online:
+                # A rejected/slow control command is not proof of a network outage.
+                state["control_error"] = "Control request failed; see Debug logs"
+                return
+            self.command_revision[index] += 1
+            self._reachable(index)
+            state.update(error=None, control_error=None)
             if focus is not None:
                 state.update(focus=focus, focus_source="command", focus_updated_at=timestamp())
 
@@ -83,6 +99,7 @@ class Dashboard:
         config = self.configs[index]
         with self.guard:
             revision = self.command_revision[index]
+        response = None
         try:
             response = session.get(config["url"].rstrip("/") + "/axis-cgi/com/ptz.cgi",
                                    params={"camera": config.get("channel", 1), "query": "position"},
@@ -97,15 +114,32 @@ class Dashboard:
                 if revision != self.command_revision[index]:
                     return  # A newer control response supersedes this probe.
                 state = self.states[index]
-                state.update(online=True, checked_at=timestamp(), error=None)
+                self._reachable(index)
+                state.update(error=None)
                 if mode:
                     state.update(focus=mode, focus_source="camera", focus_updated_at=timestamp())
         except (requests.RequestException, ValueError) as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             reason = f"HTTP {status}" if status else (str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
             with self.guard:
-                if revision == self.command_revision[index]:
-                    self.states[index].update(online=False, checked_at=timestamp(), error=reason)
+                if revision != self.command_revision[index]:
+                    return
+                state = self.states[index]
+                if response is not None:
+                    # Even a 401/503 or an unsupported status query proves that
+                    # the camera responded. Show the API problem separately.
+                    self._reachable(index)
+                    state.update(error=reason)
+                else:
+                    failures = state["consecutive_failures"] + 1
+                    last_success = self.last_success[index]
+                    recently_seen = last_success is not None and self.clock() - last_success < self.offline_grace
+                    offline = failures >= self.offline_threshold and not recently_seen
+                    if offline:
+                        state["online"] = False
+                    state.update(checked_at=timestamp(), error=reason, consecutive_failures=failures,
+                                 status_note="No camera response confirmed" if offline else
+                                 f"Health check delayed ({failures} consecutive failures); confirming connectivity")
 
     def _monitor(self, index):
         config = self.configs[index]

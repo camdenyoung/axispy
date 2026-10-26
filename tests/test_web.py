@@ -42,13 +42,14 @@ def test_status_probe_is_read_only_and_reports_focus(web_config):
 
 
 @pytest.mark.parametrize('result,reason', [(response(status=401), 'HTTP 401'), (response(status=503), 'HTTP 503'), (response('<html>Login</html>'), 'VAPIX position'), (response('Error: not permitted'), 'VAPIX position')])
-def test_bad_probe_is_unavailable_with_reason(web_config, result, reason):
+def test_api_error_stays_online_with_reason(web_config, result, reason):
     dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]))
     session = Mock()
     session.get.return_value = result
     dashboard.probe(0, session)
     state = dashboard.snapshot()['cameras'][0]
-    assert state['online'] is False
+    assert state['online'] is True
+    assert state['consecutive_failures'] == 0
     assert reason in state['error']
     assert state['focus'] == 'unknown'
 
@@ -183,3 +184,104 @@ def test_http_live_logs_and_routes(running_dashboard, caplog):
     assert get(dashboard, '/api/logs?after=-1').status_code == 400
     assert get(dashboard, '/.env').status_code == 404
     assert get(dashboard, '/api/status').headers['Cache-Control'] == 'no-store'
+
+
+
+def test_single_probe_timeout_does_not_mark_healthy_camera_offline(web_config):
+    now = [0.]
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]), clock=lambda: now[0])
+    session = Mock()
+    session.get.return_value = response()
+    dashboard.probe(0, session)
+    now[0] = 5
+    session.get.side_effect = requests.ReadTimeout()
+    dashboard.probe(0, session)
+    state = dashboard.snapshot()['cameras'][0]
+    assert state['online'] is True
+    assert state['consecutive_failures'] == 1
+    assert 'confirming connectivity' in state['status_note']
+    session.get.side_effect = None
+    now[0] = 10
+    dashboard.probe(0, session)
+    state = dashboard.snapshot()['cameras'][0]
+    assert state['online'] is True
+    assert state['consecutive_failures'] == 0
+    assert state['status_note'] is None
+    assert state['error'] is None
+
+
+def test_persistent_outage_becomes_offline_and_recovers(web_config):
+    now = [0.]
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]), clock=lambda: now[0])
+    dashboard.command_result(0, True, 'manual')
+    session = Mock()
+    session.get.side_effect = requests.ConnectionError()
+    for moment in (5, 10):
+        now[0] = moment
+        dashboard.probe(0, session)
+        assert dashboard.snapshot()['cameras'][0]['online'] is True
+    now[0] = 15
+    dashboard.probe(0, session)
+    state = dashboard.snapshot()['cameras'][0]
+    assert state['online'] is False
+    assert state['consecutive_failures'] == 3
+    assert state['focus'] == 'manual'
+    session.get.side_effect = None
+    session.get.return_value = response()
+    now[0] = 20
+    dashboard.probe(0, session)
+    assert dashboard.snapshot()['cameras'][0]['online'] is True
+
+
+def test_control_failure_does_not_toggle_connectivity(web_config):
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]))
+    dashboard.command_result(0, True)
+    for _ in range(10):
+        dashboard.command_result(0, False)
+    state = dashboard.snapshot()['cameras'][0]
+    assert state['online'] is True
+    assert state['consecutive_failures'] == 0
+    assert 'Control request failed' in state['control_error']
+    dashboard.command_result(0, True)
+    assert dashboard.snapshot()['cameras'][0]['control_error'] is None
+
+
+def test_recent_success_prevents_burst_failures_from_claiming_offline(web_config):
+    now = [0.]
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]), clock=lambda: now[0])
+    dashboard.command_result(0, True)
+    session = Mock()
+    session.get.side_effect = requests.Timeout()
+    for moment in (1, 2, 3):
+        now[0] = moment
+        dashboard.probe(0, session)
+    assert dashboard.snapshot()['cameras'][0]['online'] is True
+    now[0] = 15
+    dashboard.probe(0, session)
+    assert dashboard.snapshot()['cameras'][0]['online'] is False
+
+
+def test_initial_connectivity_is_unknown_until_outage_confirmed(web_config):
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]))
+    session = Mock()
+    session.get.side_effect = requests.Timeout()
+    for _ in range(2):
+        dashboard.probe(0, session)
+        assert dashboard.snapshot()['cameras'][0]['online'] is None
+    dashboard.probe(0, session)
+    assert dashboard.snapshot()['cameras'][0]['online'] is False
+
+
+def test_failed_commands_do_not_suppress_background_outage_evidence(web_config):
+    now = [0.]
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]), clock=lambda: now[0])
+    dashboard.command_result(0, True)
+    session = Mock()
+    def failed_request(*_, **__):
+        dashboard.command_result(0, False)
+        raise requests.Timeout()
+    session.get.side_effect = failed_request
+    for moment in (5, 10, 15):
+        now[0] = moment
+        dashboard.probe(0, session)
+    assert dashboard.snapshot()['cameras'][0]['online'] is False
