@@ -27,6 +27,8 @@ rate_hz = 10
 timeout = 0.5
 # Focus/autofocus lens operations may take longer than PTZ responses.
 focus_timeout = 2.0
+# Overridden by AXIS_AUTOFOCUS_HOLD_SECONDS when set.
+autofocus_hold_seconds = 5.0
 # Camera-side motion watchdog; requires camera support. See README.
 continuous_timeout = 2
 

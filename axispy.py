@@ -37,6 +37,7 @@ class Settings:
     timeout: float
     continuous_timeout: int
     focus_timeout: float = 2.0
+    autofocus_hold_seconds: float = 5.0
 
     @classmethod
     def load(cls, path: str | None = None) -> Settings:
@@ -70,9 +71,12 @@ class Settings:
             else:
                 value = type(default)(raw)
             data["joystick"][key] = value
-        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int), ("focus_timeout", float)):
+        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int), ("focus_timeout", float), ("autofocus_hold_seconds", float)):
             if f"AXIS_{key.upper()}" in os.environ:
-                data["control"][key] = cast(os.environ[f"AXIS_{key.upper()}"])
+                raw = os.environ[f"AXIS_{key.upper()}"]
+                if key == "autofocus_hold_seconds" and not raw.strip():
+                    continue
+                data["control"][key] = cast(raw)
         for i, camera in enumerate(data["cameras"], 1):
             for key in ("url", "username", "channel", "ca_bundle"):
                 raw = os.environ.get(f"AXIS_J{i}_{key.upper()}")
@@ -108,6 +112,9 @@ class Settings:
         rate, timeout = float(c.get("rate_hz", 10)), float(c.get("timeout", .5))
         watchdog = c.get("continuous_timeout", 2)
         focus_timeout = float(c.get("focus_timeout", 2))
+        autofocus_hold_seconds = float(c.get("autofocus_hold_seconds", 5))
+        if not math.isfinite(autofocus_hold_seconds) or autofocus_hold_seconds <= 0:
+            raise ValueError("autofocus_hold_seconds must be a finite number greater than zero")
         if not .5 <= rate <= 50 or not .1 <= timeout <= 10:
             raise ValueError("rate_hz must be 0.5-50; timeout must be 0.1-10 seconds")
         if not .1 <= focus_timeout <= 10:
@@ -122,7 +129,7 @@ class Settings:
                 raise ValueError("Each camera needs username and password_env")
             if type(camera.get("channel", 1)) is not int or camera.get("channel", 1) < 1:
                 raise ValueError("Camera channel must be a positive integer")
-        return cls(j, cameras, rate, timeout, watchdog, focus_timeout)
+        return cls(j, cameras, rate, timeout, watchdog, focus_timeout, autofocus_hold_seconds)
 
 
 class CameraCommandError(RuntimeError):
@@ -346,8 +353,9 @@ class Controller:
 
 
 class CameraButtonHolds:
-    """One autofocus gesture per continuous five-second camera-button hold."""
-    def __init__(self):
+    """One autofocus gesture per continuous camera-button hold."""
+    def __init__(self, hold_seconds=5.0):
+        self.hold_seconds = hold_seconds
         self.started = {}
         self.fired = set()
         self.blocked = set()
@@ -366,7 +374,7 @@ class CameraButtonHolds:
         ready = []
         for index in sorted(pressed - self.blocked):
             self.started.setdefault(index, now)
-            if index not in self.fired and now - self.started[index] >= 5:
+            if index not in self.fired and now - self.started[index] >= self.hold_seconds:
                 self.fired.add(index)
                 ready.append(index)
         return ready
@@ -427,7 +435,7 @@ def run(args):
                 cameras.append(Camera(config, settings.timeout, settings.continuous_timeout, settings.focus_timeout))
             controller = Controller(cameras)
             LOG.info("Selected %s; waiting for joystick and camera readiness", cameras[0].name)
-        holds = CameraButtonHolds()
+        holds = CameraButtonHolds(settings.autofocus_hold_seconds if settings else 5.0)
         manual_focus_blocked = False
         last_motion = None
         next_send = next_connect = 0

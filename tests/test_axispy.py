@@ -700,11 +700,16 @@ def test_autofocus_outage_uses_backoff_and_does_not_claim_success(caplog):
 
 
 @pytest.mark.parametrize('index', range(4))
-def test_runtime_camera_hold_enables_autofocus_once_and_suppresses_held_manual_focus(camera_environment, monkeypatch, index):
+@pytest.mark.parametrize('hold_seconds,autofocus_frame', [(None, 7), ('7', 9), ('2.5', 5)])
+def test_runtime_camera_hold_enables_autofocus_once_and_suppresses_held_manual_focus(camera_environment, monkeypatch, index, hold_seconds, autofocus_frame):
     import axispy
     import signal
     import sys
     from types import SimpleNamespace
+    if hold_seconds is None:
+        monkeypatch.delenv('AXIS_AUTOFOCUS_HOLD_SECONDS', raising=False)
+    else:
+        monkeypatch.setenv('AXIS_AUTOFOCUS_HOLD_SECONDS', hold_seconds)
     clock, frame = [0.], [0]
     fake = Mock()
     fake.error = type('SDLError', (Exception,), {})
@@ -743,9 +748,9 @@ def test_runtime_camera_hold_enables_autofocus_once_and_suppresses_held_manual_f
     cameras[index].enable_autofocus.side_effect = lambda: autofocus_frames.append(frame[0])
     monkeypatch.setattr(axispy, 'Camera', Mock(side_effect=cameras))
     axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
-    assert autofocus_frames == [7]
-    assert any(moment < 7 and motion[3] == -30 for moment, motion in sent)
-    assert all(motion[3] == 0 for moment, motion in sent if 7 <= moment <= 10)
+    assert autofocus_frames == [autofocus_frame]
+    assert any(moment < autofocus_frame and motion[3] == -30 for moment, motion in sent)
+    assert all(motion[3] == 0 for moment, motion in sent if autofocus_frame <= moment <= 10)
     assert any(moment == 11 and motion[3] == -30 for moment, motion in sent)
     for i, camera in enumerate(cameras):
         if i != index:
@@ -875,3 +880,39 @@ def test_waiting_for_neutral_after_timeout_does_not_flood_stops(caplog):
     camera.move.assert_not_called()
     assert 'stop confirmed' in caplog.text
     assert 'unavailable' not in caplog.text
+
+
+
+@pytest.mark.parametrize('value,expected', [(None, 5), ('', 5), ('  ', 5), ('3', 3), ('2.5', 2.5)])
+def test_autofocus_hold_duration_environment(camera_environment, monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv('AXIS_AUTOFOCUS_HOLD_SECONDS', raising=False)
+    else:
+        monkeypatch.setenv('AXIS_AUTOFOCUS_HOLD_SECONDS', value)
+    settings = Settings.load()
+    assert settings.autofocus_hold_seconds == expected
+
+
+@pytest.mark.parametrize('value', ['0', '-1', 'nan', 'inf', '-inf', 'invalid'])
+def test_invalid_autofocus_hold_duration(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_AUTOFOCUS_HOLD_SECONDS', value)
+    with pytest.raises(ValueError):
+        Settings.load()
+
+
+def test_autofocus_hold_environment_overrides_toml(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_AUTOFOCUS_HOLD_SECONDS', '1.5')
+    assert Settings.load('config.example.toml').autofocus_hold_seconds == 1.5
+
+
+@pytest.mark.parametrize('duration', [.5, 2.5, 10])
+def test_custom_hold_duration_threshold_and_repeat(duration):
+    from axispy import CameraButtonHolds
+    holds = CameraButtonHolds(duration)
+    assert holds.update({0}, 0) == []
+    assert holds.update({0}, duration - .001) == []
+    assert holds.update({0}, duration) == [0]
+    assert holds.update({0}, duration + 10) == []
+    holds.release(0)
+    assert holds.update({0}, 100) == []
+    assert holds.update({0}, 100 + duration) == [0]
