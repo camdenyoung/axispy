@@ -21,6 +21,7 @@ def test_inverted_axis():
 def test_deadman():
     joystick = Mock()
     joystick.get_button.return_value = False
+    joystick.get_button.return_value = False
     assert read_motion(joystick, {'deadman_button': 4}) == STOP
     joystick.get_axis.assert_not_called()
 
@@ -30,15 +31,15 @@ def test_camera_switch_stops_old_and_requires_neutral():
     controller = Controller(cameras)
     controller.send(STOP)
     controller.send(STOP)
-    controller.send((50, 0, 0))
-    cameras[0].move.assert_called_with((50, 0, 0))
+    controller.send((50, 0, 0, 0))
+    cameras[0].move.assert_called_with((50, 0, 0, 0))
     controller.select(3)
     cameras[0].move.assert_called_with(STOP)
-    controller.send((50, 0, 0))
+    controller.send((50, 0, 0, 0))
     cameras[3].move.assert_called_with(STOP)
     controller.send(STOP)
-    controller.send((0, -50, 20))
-    cameras[3].move.assert_called_with((0, -50, 20))
+    controller.send((0, -50, 20, 0))
+    cameras[3].move.assert_called_with((0, -50, 20, 0))
 
 
 def test_failed_stop_prevents_selection_when_motion_is_uncertain():
@@ -46,7 +47,7 @@ def test_failed_stop_prevents_selection_when_motion_is_uncertain():
     controller = Controller(cameras)
     controller.send(STOP)
     controller.send(STOP)
-    controller.send((50, 0, 0))
+    controller.send((50, 0, 0, 0))
     cameras[0].move.side_effect = requests.Timeout()
     controller.select(1)
     assert controller.selected == 0
@@ -93,7 +94,7 @@ def test_vapix_request_and_stop(http_camera, monkeypatch):
     monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
     camera = Camera(dict(name='test', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD', channel=2), .5, 2)
     try:
-        camera.move((25, -30, 50))
+        camera.move((25, -30, 50, 0))
         camera.move(STOP)
     finally:
         camera.close()
@@ -110,7 +111,7 @@ def test_vapix_error_in_http_200(http_camera, monkeypatch):
     camera = Camera(dict(name='test', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
     try:
         with pytest.raises(RuntimeError, match='rejected'):
-            camera.move((1, 2, 3))
+            camera.move((1, 2, 3, 0))
     finally:
         camera.close()
 
@@ -148,22 +149,24 @@ def test_each_camera_button_selects_corresponding_camera(index):
 
 def test_axis_mapping_and_inversion():
     joystick = Mock()
+    joystick.get_button.return_value = False
     joystick.get_axis.side_effect = lambda index: {0: 1., 1: .59, 2: -1.}[index]
     config = Settings.load('config.example.toml').joystick
-    assert read_motion(joystick, config) == (70, -35, -50)
+    assert read_motion(joystick, config) == (70, -35, -50, 0)
 
 
 @pytest.mark.parametrize('axes,expected', [
-    ((-.929, .004, .004), (-64, 0, 0)),  # Left
-    ((.976, .004, .122), (68, 0, 0)),    # Right with incidental twist
-    ((.153, -.961, .027), (0, 67, 0)),  # Up with incidental pan
-    ((.129, .906, .004), (0, -62, 0)),  # Down with incidental pan
-    ((.004, .004, -.922), (0, 0, -45)), # Twist left
-    ((.004, .004, 1.), (0, 0, 50)),     # Twist right
+    ((-.929, .004, .004), (-64, 0, 0, 0)),  # Left
+    ((.976, .004, .122), (68, 0, 0, 0)),    # Right with incidental twist
+    ((.153, -.961, .027), (0, 67, 0, 0)),  # Up with incidental pan
+    ((.129, .906, .004), (0, -62, 0, 0)),  # Down with incidental pan
+    ((.004, .004, -.922), (0, 0, -45, 0)), # Twist left
+    ((.004, .004, 1.), (0, 0, 50, 0)),     # Twist right
     ((.004, .004, .004), STOP),          # Released
 ])
 def test_reported_t8311_samples(axes, expected):
     joystick = Mock()
+    joystick.get_button.return_value = False
     joystick.get_axis.side_effect = lambda index: axes[index]
     config = Settings.load('config.example.toml').joystick
     assert read_motion(joystick, config) == expected
@@ -260,17 +263,17 @@ def test_offline_camera_retries_at_interval_and_recovers_safely():
     controller = Controller(cameras, clock=lambda: now[0])
     controller.send(STOP)
     for _ in range(100):
-        controller.send((50, 0, 0))
+        controller.send((50, 0, 0, 0))
     assert cameras[0].move.call_count == 1
     now[0] = 5
-    controller.send((50, 0, 0))
+    controller.send((50, 0, 0, 0))
     cameras[0].move.assert_called_with(STOP)
     assert not controller.armed
-    controller.send((50, 0, 0))
+    controller.send((50, 0, 0, 0))
     cameras[0].move.assert_called_with(STOP)
     controller.send(STOP)
-    controller.send((50, 0, 0))
-    cameras[0].move.assert_called_with((50, 0, 0))
+    controller.send((50, 0, 0, 0))
+    cameras[0].move.assert_called_with((50, 0, 0, 0))
 
 
 def test_offline_idle_camera_does_not_block_other_cameras():
@@ -281,8 +284,8 @@ def test_offline_idle_camera_does_not_block_other_cameras():
     controller.select(1)
     assert controller.selected == 1
     controller.send(STOP)
-    controller.send((0, 25, 0))
-    cameras[1].move.assert_called_with((0, 25, 0))
+    controller.send((0, 25, 0, 0))
+    cameras[1].move.assert_called_with((0, 25, 0, 0))
 
 
 def test_failed_movement_response_requires_stop_before_any_more_motion():
@@ -292,14 +295,14 @@ def test_failed_movement_response_requires_stop_before_any_more_motion():
     controller.send(STOP)
     controller.send(STOP)
     cameras[0].move.side_effect = requests.Timeout()
-    controller.send((30, 0, 0))
+    controller.send((30, 0, 0, 0))
     assert 0 in controller.may_be_moving
     assert not controller.armed
     controller.select(1)
     assert controller.selected == 0
     cameras[0].move.side_effect = None
     now[0] = 5
-    controller.send((30, 0, 0))
+    controller.send((30, 0, 0, 0))
     cameras[0].move.assert_called_with(STOP)
     assert 0 not in controller.may_be_moving
     assert not controller.armed
@@ -339,6 +342,7 @@ def test_usb_wait_connect_disconnect_and_reconnect(camera_environment, monkeypat
     fake.JOYBUTTONDOWN = 2
     fake.JOYAXISMOTION = 3
     device = Mock()
+    device.get_button.return_value = False
     device.get_numaxes.return_value = 3
     device.get_numbuttons.return_value = 6
     device.get_instance_id.return_value = 42
@@ -438,7 +442,7 @@ def test_http_204_accepts_motion_stop_and_camera_switch(http_camera, monkeypatch
         controller = Controller(cameras)
         controller.send(STOP)  # Initial stop handshake
         controller.send(STOP)  # Center to arm
-        controller.send((25, -30, 50))
+        controller.send((25, -30, 50, 0))
         assert controller.armed
         assert controller.unavailable == set()
         assert parse_qs(received[-1].query)['continuouspantiltmove'] == ['25,-30']
@@ -453,3 +457,136 @@ def test_http_204_accepts_motion_stop_and_camera_switch(http_camera, monkeypatch
     finally:
         for camera in cameras:
             camera.close()
+
+
+@pytest.mark.parametrize('buttons,expected', [({4}, -30), ({5}, 30), (set(), 0), ({4, 5}, 0)])
+def test_focus_buttons(buttons, expected):
+    joystick = Mock()
+    joystick.get_axis.return_value = 0.
+    joystick.get_button.side_effect = lambda button: button in buttons
+    config = Settings.load('config.example.toml').joystick
+    assert read_motion(joystick, config) == (0, 0, 0, expected)
+
+
+def test_focus_http_requests_and_release_while_panning(http_camera, monkeypatch):
+    url, received, handler = http_camera
+    handler.status = 204
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    try:
+        camera.move((20, 0, 0, -30))
+        camera.move((20, 0, 0, 0))
+        camera.move((20, 0, 0, 30))
+        camera.move(STOP)
+        camera.move(STOP)
+        params = [parse_qs(request.query) for request in received]
+        assert params[0]['continuousfocusmove'] == ['-30']
+        assert params[0]['autofocus'] == ['off']
+        assert params[1]['continuousfocusmove'] == ['0']
+        assert params[1]['continuouspantiltmove'] == ['20,0']
+        assert 'autofocus' not in params[1]
+        assert params[2]['continuousfocusmove'] == ['30']
+        assert params[3]['continuousfocusmove'] == ['0']
+        assert 'continuousfocusmove' not in params[4]
+    finally:
+        camera.close()
+
+
+def test_failed_focus_request_preserves_need_for_stop(http_camera, monkeypatch):
+    url, received, handler = http_camera
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    handler.body = b'Error: temporarily unavailable'
+    try:
+        with pytest.raises(RuntimeError):
+            camera.move((0, 0, 0, -30))
+        assert camera.focus_active
+        handler.body = b''
+        camera.move(STOP)
+        assert parse_qs(received[-1].query)['continuousfocusmove'] == ['0']
+        assert not camera.focus_active
+    finally:
+        camera.close()
+
+
+def test_switch_stops_focus_and_requires_button_release():
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras)
+    controller.send(STOP)
+    controller.send(STOP)
+    controller.send((0, 0, 0, -30))
+    controller.select(1)
+    cameras[0].move.assert_called_with(STOP)
+    controller.send((0, 0, 0, -30))
+    cameras[1].move.assert_called_with(STOP)
+    controller.send(STOP)
+    controller.send((0, 0, 0, 30))
+    cameras[1].move.assert_called_with((0, 0, 0, 30))
+    controller.stop()
+    cameras[1].move.assert_called_with(STOP)
+
+
+@pytest.mark.parametrize('key,value', [('AXIS_FOCUS_NEAR_BUTTON', '-2'), ('AXIS_FOCUS_FAR_BUTTON', '4'), ('AXIS_FOCUS_SPEED', '0'), ('AXIS_FOCUS_SPEED', '101'), ('AXIS_DEADMAN_BUTTON', '4')])
+def test_invalid_focus_settings(camera_environment, monkeypatch, key, value):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        Settings.load()
+
+
+def test_focus_settings_from_environment(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_FOCUS_NEAR_BUTTON', '5')
+    monkeypatch.setenv('AXIS_FOCUS_FAR_BUTTON', '4')
+    monkeypatch.setenv('AXIS_FOCUS_SPEED', '20')
+    settings = Settings.load()
+    assert settings.joystick['focus_near_button'] == 5
+    assert settings.joystick['focus_far_button'] == 4
+    assert settings.joystick['focus_speed'] == 20
+
+
+def test_focus_release_bypasses_rate_limit_while_panning(camera_environment, monkeypatch):
+    import axispy
+    import signal
+    import sys
+    from types import SimpleNamespace
+    clock, frame = [0.], [0]
+    fake = Mock()
+    fake.error = type('SDLError', (Exception,), {})
+    fake.JOYDEVICEREMOVED, fake.JOYBUTTONDOWN, fake.JOYAXISMOTION = 1, 2, 3
+    device = Mock()
+    device.get_numaxes.return_value = 3
+    device.get_numbuttons.return_value = 6
+    device.get_axis.side_effect = lambda _: 0. if frame[0] <= 6 else .8
+    device.get_button.side_effect = lambda button: frame[0] == 8 and button == 4
+    fake.joystick.get_count.return_value = 1
+    fake.joystick.Joystick.return_value = device
+    handlers = {}
+    monkeypatch.setattr(signal, 'signal', lambda sig, handler: handlers.setdefault(sig, handler))
+    def events():
+        frame[0] += 1
+        if frame[0] == 10:
+            handlers[signal.SIGTERM]()
+        return []
+    fake.event.get.side_effect = events
+    monkeypatch.setitem(sys.modules, 'pygame', fake)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(axispy.time, 'sleep', lambda _: clock.__setitem__(0, clock[0] + .02))
+    cameras = [Mock() for _ in range(4)]
+    monkeypatch.setattr(axispy, 'Camera', Mock(side_effect=cameras))
+    axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
+    sent = [call.args[0] for call in cameras[0].move.call_args_list]
+    focus_index = next(i for i, motion in enumerate(sent) if motion[3] == -30)
+    assert sent[focus_index][0] != 0
+    assert sent[focus_index + 1] == (*sent[focus_index][:3], 0)
+
+
+def test_holding_both_focus_buttons_does_not_rearm_after_reconnect():
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras)
+    controller.send(STOP, neutral=False)
+    controller.send(STOP, neutral=False)
+    controller.send((0, 0, 0, -30))
+    cameras[0].move.assert_called_with(STOP)
+    assert not controller.armed
+    controller.send(STOP, neutral=True)
+    controller.send((0, 0, 0, -30))
+    cameras[0].move.assert_called_with((0, 0, 0, -30))

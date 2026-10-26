@@ -34,7 +34,7 @@ Reported device: `InduKey(c) AXIS T8311 Joystick`, 3 axes, 6 buttons; SDL GUID `
 | Up / down | Axis 1, negative / positive | `tilt_axis = 1`, `invert_tilt = true` (VAPIX positive tilt is up) |
 | Twist left / right | Axis 2, negative / positive | `zoom_axis = 2`, `invert_zoom = false` (left zooms out, right zooms in) |
 | J1 / J2 / J3 / J4 | Buttons 0 / 1 / 2 / 3 | `camera_buttons = [0, 1, 2, 3]` |
-| L / R | Buttons 4 / 5 | Unassigned by default; optionally set `deadman_button = 4` or `5` |
+| L / R | Buttons 4 / 5 | Hold L for focus near, R for focus far; release to stop |
 
 The trace included incidental cross-axis values up to 0.153 while moving another axis. The default deadzone is 0.18 to suppress those small unintended pan/zoom commands. Existing `config.toml` files are not overwritten: change their `deadzone` manually. Small center offsets such as +0.004 are also filtered. Axis extrema did not all reach ±1; full stick travel may therefore produce slightly less than the configured maximum speed.
 
@@ -63,14 +63,17 @@ HTTPS certificates are verified. For a private camera CA, add `ca_bundle = "/abs
 - Start with the joystick centered. J1 is selected initially.
 - Move the stick for pan/tilt and the configured zoom axis for zoom. Speeds scale from the deadzone to the configured maximum (0–100).
 - Press J1–J4 to stop the old camera and select the corresponding camera. Center the joystick before moving the newly selected camera. An offline camera that has not been moving does not block selecting another camera. If the old camera may still be moving and its stop cannot be confirmed, selection stays on it until a stop succeeds; retry your selection after reconnection.
-- Releasing the controls sends zero-speed commands. Optionally configure `deadman_button` for hold-to-move behavior.
+- Hold **L** for manual focus near (in) and **R** for focus far (out). Release to stop focus, even while panning, tilting or zooming; holding both buttons stops focus. Default focus speed is 30 (range 1–100).
+- Manual focus sends `autofocus=off` and `continuousfocusmove`; autofocus stays off after release so the camera does not undo your focus adjustment. Re-enable autofocus using the camera interface when wanted. Focus support depends on camera/lens capabilities.
+- Startup, camera switches and reconnects require centering the stick **and releasing both focus buttons** before control is armed. Focus is also stopped during camera switches, USB disconnects and shutdown.
+- Releasing the controls sends zero-speed commands. Optionally configure `deadman_button` for hold-to-move behavior. Button assignments must be distinct; to reuse L or R as a deadman, disable its focus mapping with `focus_near_button = -1` or `focus_far_button = -1`.
 - With no joystick attached, the controller stays running and checks for USB every two seconds. Unplugging it triggers stop attempts and returns to waiting; reconnecting requires centering before movement.
 - Camera connection, authentication, or PTZ request failures disarm movement and retry with stop commands every five seconds. Recovery requires a successful stop and then centering before movement; held-stick commands are never replayed. Repeated identical failures log once, with new messages when the failure changes or the camera recovers.
 - Ctrl+C and SIGTERM trigger stop attempts before exit. Invalid configuration still fails at startup so it can be corrected.
 
 Moving commands are refreshed at `rate_hz` (10 by default). Each HTTP operation has bounded connect/read timeouts; an unresponsive camera can delay polling and button handling. This is a small synchronous controller, not a hard real-time control system.
 
-Commands include `continuouspantiltmove`, `continuouszoommove`, and `continuoustimeout` (default 2 seconds). Confirm support and timeout behavior for your camera model/firmware in the [Axis VAPIX PTZ documentation](https://developer.axis.com/vapix/network-video/pantiltzoom-api/). A successful HTTP response does not prove the camera enforces a watchdog. With low maximum speeds, test neutral stop, camera switching, unplugging the joystick, and loss of network connectivity before operational use. If a camera ignores the timeout, motion may continue after a process crash or network outage; a client cannot deliver a stop over a broken connection. Keep independent camera controls available.
+Commands include `continuouspantiltmove`, `continuouszoommove`, `continuousfocusmove` (when focusing), and `continuoustimeout` (default 2 seconds). Confirm support and timeout behavior for your camera model/firmware in the [Axis VAPIX PTZ documentation](https://developer.axis.com/vapix/network-video/pantiltzoom-api/). A successful HTTP response does not prove the camera enforces a watchdog. With low maximum speeds, test neutral stop, camera switching, unplugging the joystick, and loss of network connectivity before operational use. If a camera ignores the timeout, motion may continue after a process crash or network outage; a client cannot deliver a stop over a broken connection. Keep independent camera controls available.
 
 ## Development and validation
 
@@ -79,6 +82,6 @@ python -m pip install pytest
 python -m pytest -q
 ```
 
-Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, shutdown retries, outage backoff, USB reconnects, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. USB mappings have been confirmed from user-supplied inspection output; real camera authentication, mechanical movement, and firmware timeout behavior still require hardware validation.
+Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, manual focus and release stopping, shutdown retries, outage backoff, USB reconnects, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. USB mappings have been confirmed from user-supplied inspection output; real camera authentication, mechanical movement, and firmware timeout behavior still require hardware validation.
 
 To develop in the cloud, use the existing checkout; no additional Git worktree is needed. `axispy --list` exercises SDL discovery even when no USB device is passed through. Run the controller itself on a host with both joystick access and camera connectivity.

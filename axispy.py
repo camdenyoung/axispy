@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from requests.auth import HTTPDigestAuth
 
 LOG = logging.getLogger("axispy")
-STOP = (0, 0, 0)
+STOP = (0, 0, 0, 0)
 
 
 def speed(value: float, deadzone: float, maximum: int, inverted: bool) -> int:
@@ -43,7 +43,8 @@ class Settings:
             "joystick": dict(device=0, pan_axis=0, tilt_axis=1, zoom_axis=2,
                              invert_pan=False, invert_tilt=True, invert_zoom=False,
                              deadzone=.18, max_pan=70, max_tilt=70, max_zoom=50,
-                             camera_buttons=[0, 1, 2, 3], deadman_button=-1),
+                             camera_buttons=[0, 1, 2, 3], deadman_button=-1,
+                             focus_near_button=4, focus_far_button=5, focus_speed=30),
             "cameras": [dict(name=f"J{i}", url="", username="operator",
                              password_env=f"AXIS_J{i}_PASSWORD", channel=1)
                         for i in range(1, 5)],
@@ -89,6 +90,14 @@ class Settings:
         deadman = j.get("deadman_button", -1)
         if type(deadman) is not int or deadman < -1:
             raise ValueError("deadman_button must be -1 or a nonnegative integer")
+        focus_buttons = [j["focus_near_button"], j["focus_far_button"]]
+        if any(type(button) is not int or button < -1 for button in focus_buttons):
+            raise ValueError("Focus buttons must be -1 (disabled) or nonnegative integers")
+        assigned = buttons + [button for button in [deadman, *focus_buttons] if button >= 0]
+        if len(assigned) != len(set(assigned)):
+            raise ValueError("Camera, focus and deadman buttons must have distinct indices; use -1 to disable a focus button")
+        if type(j["focus_speed"]) is not int or not 1 <= j["focus_speed"] <= 100:
+            raise ValueError("focus_speed must be an integer from 1 to 100")
         if not 0 <= j.get("deadzone", .18) < 1:
             raise ValueError("deadzone must be between 0 (inclusive) and 1 (exclusive)")
         for axis in ("pan", "tilt", "zoom"):
@@ -126,6 +135,7 @@ class Camera:
         self.channel = config.get("channel", 1)
         self.timeout = timeout
         self.watchdog = watchdog
+        self.focus_active = False
         self.session = requests.Session()
         self.session.auth = HTTPDigestAuth(config["username"], password)
         # Do not route local camera credentials through ambient HTTP proxies.
@@ -134,14 +144,28 @@ class Camera:
         if not isinstance(self.session.verify, (str, bool)) or self.session.verify is False:
             raise ValueError("Use a trusted ca_bundle; TLS verification cannot be disabled")
 
-    def move(self, motion: tuple[int, int, int]):
-        pan, tilt, zoom = motion
-        response = self.session.get(self.url, params={
+    def move(self, motion: tuple[int, int, int, int]):
+        pan, tilt, zoom, focus = motion
+        params = {
             "camera": self.channel,
             "continuouspantiltmove": f"{pan},{tilt}",
             "continuouszoommove": str(zoom),
             "continuoustimeout": self.watchdog,
-        }, timeout=self.timeout, allow_redirects=False)
+        }
+        # Avoid requiring focus support for cameras used only for pan/tilt/zoom.
+        if focus or self.focus_active:
+            params["continuousfocusmove"] = str(focus)
+            if focus:
+                params["autofocus"] = "off"
+            # Set before the request: even a lost response needs a focus stop.
+            self.focus_active = True
+        self._request(params)
+        if focus == 0:
+            self.focus_active = False
+
+    def _request(self, params):
+        response = self.session.get(self.url, params=params,
+                                    timeout=self.timeout, allow_redirects=False)
         response.raise_for_status()
         if 300 <= response.status_code < 400:
             target = urlsplit(response.headers.get("Location", ""))
@@ -201,7 +225,7 @@ class Controller:
             self.armed = False
             return False
         if index in self.unavailable:
-            LOG.info("%s reconnected; center joystick to enable movement", self.cameras[index].name)
+            LOG.info("%s reconnected; center joystick and release focus buttons to enable movement", self.cameras[index].name)
         self.unavailable.discard(index)
         self.failure_reason.pop(index, None)
         self.retry_at[index] = 0
@@ -222,14 +246,14 @@ class Controller:
         self.selected = index
         self.stop_required.add(index)
         self._move(index, STOP)
-        LOG.info("Selected %s; center joystick to enable movement", self.cameras[index].name)
+        LOG.info("Selected %s; center joystick and release focus buttons to enable movement", self.cameras[index].name)
 
-    def send(self, motion):
+    def send(self, motion, neutral=True):
         if self.selected in self.stop_required:
             self.armed = False
             self._move(self.selected, STOP)
             return
-        if motion == STOP:
+        if motion == STOP and neutral:
             self.armed = True
         self._move(self.selected, motion if self.armed else STOP)
 
@@ -251,9 +275,14 @@ class Controller:
 def read_motion(joystick, config):
     if config.get("deadman_button", -1) >= 0 and not joystick.get_button(config["deadman_button"]):
         return STOP
-    return tuple(speed(joystick.get_axis(config[f"{axis}_axis"]),
+    near = config.get("focus_near_button", 4)
+    far = config.get("focus_far_button", 5)
+    focus = ((int(bool(joystick.get_button(far))) if far >= 0 else 0)
+             - (int(bool(joystick.get_button(near))) if near >= 0 else 0)) * config.get("focus_speed", 30)
+    axes = tuple(speed(joystick.get_axis(config[f"{axis}_axis"]),
                        config.get("deadzone", .18), config.get(f"max_{axis}", 70),
                        config.get(f"invert_{axis}", False)) for axis in ("pan", "tilt", "zoom"))
+    return (*axes, focus)
 
 
 def run(args):
@@ -334,10 +363,10 @@ def run(args):
                             j = settings.joystick
                             if max(j[f"{a}_axis"] for a in ("pan", "tilt", "zoom")) >= candidate.get_numaxes():
                                 raise ValueError("Axis index out of range; run --inspect")
-                            if max(*j["camera_buttons"], j.get("deadman_button", -1)) >= candidate.get_numbuttons():
+                            if max(*j["camera_buttons"], j.get("deadman_button", -1), j["focus_near_button"], j["focus_far_button"]) >= candidate.get_numbuttons():
                                 raise ValueError("Button index out of range; run --inspect")
                         joystick = candidate
-                        LOG.info("Joystick connected: %s; center joystick to enable movement", joystick.get_name())
+                        LOG.info("Joystick connected: %s; center joystick and release focus buttons to enable movement", joystick.get_name())
                         if controller:
                             controller.armed = False
                             controller.stop_required.add(controller.selected)
@@ -356,6 +385,11 @@ def run(args):
                 else:
                     try:
                         motion = read_motion(joystick, settings.joystick)
+                        focus_released = not any(
+                            joystick.get_button(button) for button in (
+                                settings.joystick["focus_near_button"],
+                                settings.joystick["focus_far_button"],
+                            ) if button >= 0)
                     except pygame.error:
                         LOG.warning("Joystick read failed; stopping camera and waiting for USB")
                         joystick.quit()
@@ -364,8 +398,9 @@ def run(args):
                         next_connect = time.monotonic() + 2
                         waiting_logged = True
                         continue
-                    if now >= next_send or (motion == STOP and motion != last_motion):
-                        controller.send(motion)
+                    if (now >= next_send or (motion == STOP and motion != last_motion)
+                            or (last_motion is not None and motion[3] != last_motion[3])):
+                        controller.send(motion, neutral=focus_released)
                         last_motion = motion
                         next_send = time.monotonic() + 1 / settings.rate
             time.sleep(.005 if joystick is not None and controller else .05)

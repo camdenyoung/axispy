@@ -51,7 +51,7 @@ HTTPS verification stays enabled. For a private camera CA, add a read-only certi
 
 ### Environment variables
 
-Required for each `n` from 1 to 4: `AXIS_Jn_URL` and `AXIS_Jn_PASSWORD`. `AXIS_Jn_USERNAME` defaults to `operator`; `AXIS_Jn_CHANNEL` defaults to `1`; `AXIS_Jn_CA_BUNDLE` is optional. See `.env.example` for joystick and timing overrides.
+Required for each `n` from 1 to 4: `AXIS_Jn_URL` and `AXIS_Jn_PASSWORD`. `AXIS_Jn_USERNAME` defaults to `operator`; `AXIS_Jn_CHANNEL` defaults to `1`; `AXIS_Jn_CA_BUNDLE` is optional. See `.env.example` for joystick and timing overrides. L/R default to focus near/far. Override with `AXIS_FOCUS_NEAR_BUTTON=4`, `AXIS_FOCUS_FAR_BUTTON=5`, and `AXIS_FOCUS_SPEED=30` (1–100). Use `-1` to disable a focus button, or swap the two indices to reverse directions. Autofocus is disabled on manual focus commands and stays off until re-enabled through the camera interface. No `.env` changes are required to enable the default L/R mappings.
 
 Passwords containing `$`, `#`, or spaces should be single-quoted in `.env`. Never commit `.env`; Docker administrators can inspect container environment variables, so restrict access to the Pi and Docker. The application never prints password values.
 
