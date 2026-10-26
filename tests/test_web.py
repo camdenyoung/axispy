@@ -1,4 +1,5 @@
 import json
+import errno
 import logging
 import threading
 import time
@@ -322,3 +323,27 @@ def test_superseded_probe_failure_is_still_logged(web_config, caplog):
     dashboard.probe(0, session)
     assert dashboard.snapshot()['cameras'][0]['online'] is True
     assert 'health check failed: ReadTimeout' in caplog.text
+
+
+@pytest.mark.parametrize('number,label', [(errno.ECONNREFUSED, 'connection refused'), (errno.ECONNRESET, 'connection reset'), (errno.ENETUNREACH, 'network unreachable'), (errno.EHOSTUNREACH, 'host unreachable')])
+def test_connection_error_reports_nested_errno_without_raw_messages(number, label):
+    from axispy_web import request_failure_reason
+    from urllib3.exceptions import MaxRetryError, NewConnectionError
+    cause = OSError(number, 'private-example-password in sensitive host')
+    wrapped = NewConnectionError(None, 'private-example-password in URL')
+    wrapped.__cause__ = cause
+    error = requests.ConnectionError(MaxRetryError(None, '/private-example-password', wrapped))
+    reason = request_failure_reason(error)
+    assert label in reason
+    assert f'errno {number}' in reason
+    assert 'private-example-password' not in reason
+
+
+def test_connection_closed_and_dns_causes_are_identified():
+    from axispy_web import request_failure_reason
+    from http.client import RemoteDisconnected
+    import socket
+    assert 'before HTTP response' in request_failure_reason(requests.ConnectionError(RemoteDisconnected('secret')))
+    assert 'DNS resolution failed' in request_failure_reason(requests.ConnectionError(socket.gaierror(-2, 'secret')))
+    assert request_failure_reason(requests.ReadTimeout('secret')) == 'ReadTimeout'
+    assert request_failure_reason(requests.exceptions.SSLError('secret')) == 'SSLError'

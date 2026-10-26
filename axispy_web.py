@@ -1,10 +1,13 @@
 """Read-only dashboard, independent VAPIX status probes, and bounded live logs."""
 from collections import deque
 from datetime import datetime, timezone
+import errno
+from http.client import RemoteDisconnected
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import os
+import socket
 import threading
 import time
 from urllib.parse import parse_qs, quote, quote_plus, urlsplit
@@ -17,6 +20,34 @@ from axispy_ui import HTML
 
 def timestamp():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def request_failure_reason(exc):
+    """Expose structured network causes without formatting credential-bearing URLs."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status:
+        return f"HTTP {status}"
+    if isinstance(exc, requests.ConnectTimeout):
+        return "ConnectTimeout"
+    if not isinstance(exc, requests.ConnectionError) or isinstance(exc, requests.exceptions.SSLError):
+        return type(exc).__name__
+    pending, seen = [exc], set()
+    labels = {errno.ECONNREFUSED: "connection refused", errno.ECONNRESET: "connection reset",
+              errno.ENETUNREACH: "network unreachable", errno.EHOSTUNREACH: "host unreachable",
+              errno.ETIMEDOUT: "connection timed out", errno.EPIPE: "broken pipe"}
+    while pending:
+        cause = pending.pop()
+        if not isinstance(cause, BaseException) or id(cause) in seen:
+            continue
+        seen.add(id(cause))
+        if isinstance(cause, socket.gaierror):
+            return "ConnectionError: DNS resolution failed"
+        if isinstance(cause, RemoteDisconnected):
+            return "ConnectionError: connection closed before HTTP response"
+        if isinstance(cause, OSError) and cause.errno in labels:
+            return f"ConnectionError: {labels[cause.errno]} (errno {cause.errno})"
+        pending.extend([getattr(cause, "reason", None), cause.__cause__, cause.__context__, *cause.args])
+    return "ConnectionError: underlying socket cause unavailable"
 
 
 class LiveLogs(logging.Handler):
@@ -141,8 +172,7 @@ class Dashboard:
                 if mode:
                     state.update(focus=mode, focus_source="camera", focus_updated_at=timestamp())
         except (requests.RequestException, ValueError) as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            reason = f"HTTP {status}" if status else (str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+            reason = str(exc) if isinstance(exc, ValueError) else request_failure_reason(exc)
             self._probe_diagnostic(index, reason, started)
             with self.guard:
                 if revision != self.command_revision[index]:
