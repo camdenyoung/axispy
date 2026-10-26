@@ -155,6 +155,7 @@ class Dashboard:
         try:
             response = session.get(config["url"].rstrip("/") + "/axis-cgi/com/ptz.cgi",
                                    params={"camera": config.get("channel", 1), "query": "position"},
+                                   headers={"Connection": "close"},
                                    timeout=self.timeout, allow_redirects=False)
             response.raise_for_status()
             body = response.text.strip()
@@ -196,13 +197,16 @@ class Dashboard:
 
     def _monitor(self, index):
         config = self.configs[index]
-        with requests.Session() as session:
-            session.auth = HTTPDigestAuth(config["username"], os.environ[config["password_env"]])
-            session.trust_env = False
-            session.verify = config.get("ca_bundle", True)
-            while not self.finished.is_set():
+        # Retain Digest challenge state, but never retain an idle TCP pool
+        # across health checks. Some camera firmware closes idle keep-alives.
+        auth = HTTPDigestAuth(config["username"], os.environ[config["password_env"]])
+        while not self.finished.is_set():
+            with requests.Session() as session:
+                session.auth = auth
+                session.trust_env = False
+                session.verify = config.get("ca_bundle", True)
                 self.probe(index, session)
-                self.finished.wait(self.interval)
+            self.finished.wait(self.interval)
 
     def start(self):
         dashboard = self

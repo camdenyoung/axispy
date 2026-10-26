@@ -347,3 +347,38 @@ def test_connection_closed_and_dns_causes_are_identified():
     assert 'DNS resolution failed' in request_failure_reason(requests.ConnectionError(socket.gaierror(-2, 'secret')))
     assert request_failure_reason(requests.ReadTimeout('secret')) == 'ReadTimeout'
     assert request_failure_reason(requests.exceptions.SSLError('secret')) == 'SSLError'
+
+
+def test_health_checks_use_fresh_tcp_connections_without_changing_cadence(web_config):
+    received = []
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def do_GET(self):
+            received.append((self.client_address[1], self.headers.get('Connection'), parse_qs(urlsplit(self.path).query)))
+            body = b'pan=0\ntilt=0\nautofocus=on'
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *_):
+            pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    config = dict(web_config[0], url=f'http://127.0.0.1:{server.server_port}')
+    dashboard = Dashboard([config], Controller([Mock()]))
+    dashboard.finished = Mock()
+    dashboard.finished.is_set.side_effect = [False, False, True]
+    try:
+        dashboard._monitor(0)
+        assert len(received) == 2
+        assert received[0][0] != received[1][0]
+        assert all(item[1] == 'close' for item in received)
+        assert all(item[2] == {'camera': ['1'], 'query': ['position']} for item in received)
+        assert dashboard.finished.wait.call_count == 2
+        dashboard.finished.wait.assert_called_with(5)
+        assert dashboard.snapshot()['cameras'][0]['online'] is True
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
