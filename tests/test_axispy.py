@@ -590,3 +590,155 @@ def test_holding_both_focus_buttons_does_not_rearm_after_reconnect():
     controller.send(STOP, neutral=True)
     controller.send((0, 0, 0, -30))
     cameras[0].move.assert_called_with((0, 0, 0, -30))
+
+
+@pytest.mark.parametrize('index', range(4))
+def test_camera_button_five_second_hold_once_per_press(index):
+    from axispy import CameraButtonHolds
+    holds = CameraButtonHolds()
+    assert holds.update({index}, 10) == []
+    assert holds.update({index}, 14.999) == []
+    assert holds.update({index}, 15) == [index]
+    assert holds.update({index}, 50) == []
+    assert holds.update(set(), 51) == []
+    assert holds.update({index}, 52) == []
+    assert holds.update({index}, 57) == [index]
+
+
+def test_short_presses_and_usb_reconnect_do_not_enable_autofocus():
+    from axispy import CameraButtonHolds
+    holds = CameraButtonHolds()
+    holds.update({0}, 0)
+    holds.update(set(), 4)
+    assert holds.update({0}, 6) == []
+    assert holds.update({0}, 10) == []
+    holds.reset({0})
+    assert holds.update({0}, 100) == []
+    holds.update(set(), 101)
+    holds.update({0}, 102)
+    assert holds.update({0}, 107) == [0]
+
+
+def test_release_event_resets_hold_even_if_button_is_pressed_again_before_poll():
+    from axispy import CameraButtonHolds
+    holds = CameraButtonHolds()
+    holds.update({1}, 0)
+    holds.release(1)
+    assert holds.update({1}, 4) == []
+    assert holds.update({1}, 5) == []
+    assert holds.update({1}, 9) == [1]
+
+
+@pytest.mark.parametrize('status', [200, 204])
+def test_autofocus_http_stops_manual_focus_before_enabling(http_camera, monkeypatch, status):
+    url, received, handler = http_camera
+    handler.status = status
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J3', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD', channel=3), .5, 2)
+    try:
+        camera.move((20, 0, 0, -30))
+        camera.enable_autofocus()
+        params = [parse_qs(request.query) for request in received]
+        assert params[-2] == {'camera': ['3'], 'continuousfocusmove': ['0']}
+        assert params[-1] == {'camera': ['3'], 'autofocus': ['on']}
+        assert not camera.focus_active
+        camera.move((20, 0, 0, 0))
+        assert 'autofocus' not in parse_qs(received[-1].query)
+    finally:
+        camera.close()
+
+
+def test_autofocus_stop_failure_does_not_send_enable(http_camera, monkeypatch):
+    url, received, handler = http_camera
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    camera = Camera(dict(name='J1', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD'), .5, 2)
+    try:
+        camera.move((0, 0, 0, -30))
+        handler.body = b'Error: focus busy'
+        with pytest.raises(RuntimeError):
+            camera.enable_autofocus()
+        assert camera.focus_active
+        assert 'autofocus' not in parse_qs(received[-1].query)
+    finally:
+        camera.close()
+
+
+@pytest.mark.parametrize('index', range(4))
+def test_autofocus_targets_the_button_camera_and_logs_success(index, caplog):
+    import logging
+    cameras = [Mock() for _ in range(4)]
+    for i, camera in enumerate(cameras):
+        camera.name = f'J{i+1}'
+    controller = Controller(cameras)
+    with caplog.at_level(logging.INFO):
+        assert controller.enable_autofocus(index)
+    for i, camera in enumerate(cameras):
+        assert camera.enable_autofocus.call_count == int(i == index)
+        camera.move.assert_not_called()
+    assert controller.selected == 0
+    assert f'Autofocus enabled for J{index+1}' in caplog.text
+
+
+def test_autofocus_outage_uses_backoff_and_does_not_claim_success(caplog):
+    camera = Mock()
+    camera.name = 'J1'
+    camera.enable_autofocus.side_effect = requests.Timeout()
+    controller = Controller([camera])
+    assert not controller.enable_autofocus(0)
+    assert not controller.enable_autofocus(0)
+    assert camera.enable_autofocus.call_count == 1
+    assert 0 in controller.stop_required
+    assert 'Autofocus enabled' not in caplog.text
+
+
+@pytest.mark.parametrize('index', range(4))
+def test_runtime_camera_hold_enables_autofocus_once_and_suppresses_held_manual_focus(camera_environment, monkeypatch, index):
+    import axispy
+    import signal
+    import sys
+    from types import SimpleNamespace
+    clock, frame = [0.], [0]
+    fake = Mock()
+    fake.error = type('SDLError', (Exception,), {})
+    fake.JOYDEVICEREMOVED, fake.JOYBUTTONDOWN, fake.JOYAXISMOTION, fake.JOYBUTTONUP = 1, 2, 3, 4
+    device = Mock()
+    device.get_numaxes.return_value = 3
+    device.get_numbuttons.return_value = 6
+    device.get_instance_id.return_value = 42
+    device.get_axis.return_value = 0.
+    def pressed(button):
+        if button == index:
+            return 2 <= frame[0] <= 9
+        return button == 4 and (4 <= frame[0] <= 9 or frame[0] == 11)
+    device.get_button.side_effect = pressed
+    fake.joystick.get_count.return_value = 1
+    fake.joystick.Joystick.return_value = device
+    handlers = {}
+    monkeypatch.setattr(signal, 'signal', lambda sig, handler: handlers.setdefault(sig, handler))
+    def events():
+        frame[0] += 1
+        if frame[0] == 2:
+            return [SimpleNamespace(type=2, instance_id=42, button=index)]
+        if frame[0] == 10:
+            return [SimpleNamespace(type=4, instance_id=42, button=index)]
+        if frame[0] == 12:
+            handlers[signal.SIGTERM]()
+        return []
+    fake.event.get.side_effect = events
+    monkeypatch.setitem(sys.modules, 'pygame', fake)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(axispy.time, 'sleep', lambda _: clock.__setitem__(0, clock[0] + 1))
+    cameras = [Mock() for _ in range(4)]
+    sent = []
+    cameras[index].move.side_effect = lambda motion: sent.append((frame[0], motion))
+    autofocus_frames = []
+    cameras[index].enable_autofocus.side_effect = lambda: autofocus_frames.append(frame[0])
+    monkeypatch.setattr(axispy, 'Camera', Mock(side_effect=cameras))
+    axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
+    assert autofocus_frames == [7]
+    assert any(moment < 7 and motion[3] == -30 for moment, motion in sent)
+    assert all(motion[3] == 0 for moment, motion in sent if 7 <= moment <= 10)
+    assert any(moment == 11 and motion[3] == -30 for moment, motion in sent)
+    for i, camera in enumerate(cameras):
+        if i != index:
+            camera.enable_autofocus.assert_not_called()

@@ -163,6 +163,12 @@ class Camera:
         if focus == 0:
             self.focus_active = False
 
+    def enable_autofocus(self):
+        if self.focus_active:
+            self._request({"camera": self.channel, "continuousfocusmove": "0"})
+            self.focus_active = False
+        self._request({"camera": self.channel, "autofocus": "on"})
+
     def _request(self, params):
         response = self.session.get(self.url, params=params,
                                     timeout=self.timeout, allow_redirects=False)
@@ -213,17 +219,7 @@ class Controller:
         try:
             self.cameras[index].move(motion)
         except (requests.RequestException, RuntimeError) as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            reason = str(exc) if isinstance(exc, CameraCommandError) else (f"HTTP {status}" if status else type(exc).__name__)
-            if self.failure_reason.get(index) != reason:
-                LOG.warning("%s unavailable (%s); retrying every %ss with stop commands",
-                            self.cameras[index].name, reason, self.retry_interval)
-            self.failure_reason[index] = reason
-            self.unavailable.add(index)
-            self.stop_required.add(index)
-            self.retry_at[index] = self.clock() + self.retry_interval
-            self.armed = False
-            return False
+            return self._failed(index, exc)
         if index in self.unavailable:
             LOG.info("%s reconnected; center joystick and release focus buttons to enable movement", self.cameras[index].name)
         self.unavailable.discard(index)
@@ -232,6 +228,32 @@ class Controller:
         if motion == STOP:
             self.may_be_moving.discard(index)
             self.stop_required.discard(index)
+        return True
+
+    def _failed(self, index, exc):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        reason = str(exc) if isinstance(exc, CameraCommandError) else (f"HTTP {status}" if status else type(exc).__name__)
+        if self.failure_reason.get(index) != reason:
+            LOG.warning("%s unavailable (%s); retrying every %ss with stop commands",
+                        self.cameras[index].name, reason, self.retry_interval)
+        self.failure_reason[index] = reason
+        self.unavailable.add(index)
+        self.stop_required.add(index)
+        self.retry_at[index] = self.clock() + self.retry_interval
+        self.armed = False
+        return False
+
+    def enable_autofocus(self, index):
+        if self.clock() < self.retry_at[index]:
+            LOG.warning("Autofocus not enabled for %s: camera unavailable; release and hold its J button again after recovery", self.cameras[index].name)
+            return False
+        try:
+            self.cameras[index].enable_autofocus()
+        except (requests.RequestException, RuntimeError) as exc:
+            self._failed(index, exc)
+            LOG.warning("Autofocus not enabled for %s; release and hold its J button again after recovery", self.cameras[index].name)
+            return False
+        LOG.info("Autofocus enabled for %s", self.cameras[index].name)
         return True
 
     def select(self, index):
@@ -270,6 +292,38 @@ class Controller:
                 return
             LOG.error("Stop attempt %d failed for %s", attempt + 1, self.cameras[self.selected].name)
         LOG.error("Stop unconfirmed: use camera controls if motion continues; waiting to reconnect")
+
+
+class CameraButtonHolds:
+    """One autofocus gesture per continuous five-second camera-button hold."""
+    def __init__(self):
+        self.started = {}
+        self.fired = set()
+        self.blocked = set()
+
+    def reset(self, pressed=()):
+        self.started.clear()
+        self.fired.clear()
+        # A button held across USB attachment must be released before timing it.
+        self.blocked = set(pressed)
+
+    def update(self, pressed, now):
+        pressed = set(pressed)
+        self.blocked.intersection_update(pressed)
+        self.fired.intersection_update(pressed)
+        self.started = {index: start for index, start in self.started.items() if index in pressed}
+        ready = []
+        for index in sorted(pressed - self.blocked):
+            self.started.setdefault(index, now)
+            if index not in self.fired and now - self.started[index] >= 5:
+                self.fired.add(index)
+                ready.append(index)
+        return ready
+
+    def release(self, index):
+        self.started.pop(index, None)
+        self.fired.discard(index)
+        self.blocked.discard(index)
 
 
 def read_motion(joystick, config):
@@ -322,6 +376,8 @@ def run(args):
                 cameras.append(Camera(config, settings.timeout, settings.continuous_timeout))
             controller = Controller(cameras)
             LOG.info("Selected %s; waiting for joystick and camera readiness", cameras[0].name)
+        holds = CameraButtonHolds()
+        manual_focus_blocked = False
         last_motion = None
         next_send = next_connect = 0
         waiting_logged = False
@@ -349,6 +405,9 @@ def run(args):
                     if event.button in settings.joystick["camera_buttons"]:
                         controller.select(settings.joystick["camera_buttons"].index(event.button))
                         last_motion = None
+                elif event.type == pygame.JOYBUTTONUP:
+                    if event.button in settings.joystick["camera_buttons"]:
+                        holds.release(settings.joystick["camera_buttons"].index(event.button))
             if not running:
                 break
             now = time.monotonic()
@@ -368,6 +427,8 @@ def run(args):
                         joystick = candidate
                         LOG.info("Joystick connected: %s; center joystick and release focus buttons to enable movement", joystick.get_name())
                         if controller:
+                            holds.reset(i for i, button in enumerate(settings.joystick["camera_buttons"]) if joystick.get_button(button))
+                            manual_focus_blocked = False
                             controller.armed = False
                             controller.stop_required.add(controller.selected)
                         waiting_logged = False
@@ -390,6 +451,7 @@ def run(args):
                                 settings.joystick["focus_near_button"],
                                 settings.joystick["focus_far_button"],
                             ) if button >= 0)
+                        pressed_cameras = [i for i, button in enumerate(settings.joystick["camera_buttons"]) if joystick.get_button(button)]
                     except pygame.error:
                         LOG.warning("Joystick read failed; stopping camera and waiting for USB")
                         joystick.quit()
@@ -398,6 +460,13 @@ def run(args):
                         next_connect = time.monotonic() + 2
                         waiting_logged = True
                         continue
+                    for camera_index in holds.update(pressed_cameras, time.monotonic()):
+                        if controller.enable_autofocus(camera_index) and camera_index == controller.selected:
+                            manual_focus_blocked = not focus_released
+                    if manual_focus_blocked:
+                        motion = (*motion[:3], 0)
+                        if focus_released:
+                            manual_focus_blocked = False
                     if (now >= next_send or (motion == STOP and motion != last_motion)
                             or (last_motion is not None and motion[3] != last_motion[3])):
                         controller.send(motion, neutral=focus_released)
