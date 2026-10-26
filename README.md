@@ -6,6 +6,8 @@ Requires Python 3.11+ and an operating system that exposes the T8311 as an SDL j
 
 ## Raspberry Pi / standalone deployment
 
+Docker Compose also persists rotating application logs to `./logs/axispy.log` on the host; read them with `tail -F logs/axispy.log`.
+
 For an environment-variable-only Docker Compose deployment or a standalone executable that needs no virtual environment at runtime, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Install

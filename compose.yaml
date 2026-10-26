@@ -4,9 +4,12 @@ services:
     restart: unless-stopped
     init: true
     env_file: ${AXISPY_ENV_FILE:-.env}
+    environment:
+      AXIS_LOG_FILE: /var/log/axispy/axispy.log
     # Mount the directory so USB reconnects are visible without restarting.
     volumes:
       - /dev/input:/dev/input:ro
+      - ${AXIS_LOG_DIR:-./logs}:/var/log/axispy
     device_cgroup_rules:
       - 'c 13:* r'
     # Root can read root-owned input devices; no privileged mode is required.

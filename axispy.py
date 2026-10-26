@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from logging.handlers import RotatingFileHandler
 import math
 import os
 import signal
@@ -545,6 +546,26 @@ def run(args):
             signal.signal(sig, handler)
 
 
+def configure_file_logging():
+    """Optionally mirror application logs to a bounded, persistent UTF-8 file."""
+    path = os.environ.get("AXIS_LOG_FILE", "").strip()
+    if not path:
+        return None
+    max_bytes = int(os.environ.get("AXIS_LOG_MAX_BYTES", 10 * 1024 * 1024))
+    backups = int(os.environ.get("AXIS_LOG_BACKUP_COUNT", 3))
+    if max_bytes <= 0 or backups <= 0:
+        raise ValueError("AXIS_LOG_MAX_BYTES and AXIS_LOG_BACKUP_COUNT must be positive integers")
+    target = Path(path).expanduser()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(target, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
+    formatter = logging.Formatter("%(asctime)sZ %(levelname)s: %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+    LOG.addHandler(handler)
+    LOG.setLevel(logging.INFO)
+    return handler
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group()
@@ -554,10 +575,13 @@ def main():
     parser.add_argument("--config", help="Optional TOML configuration; environment variables override it")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    file_handler = None
     try:
         base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
         # Existing service/process environment always takes precedence over .env.
         load_dotenv(os.environ.get("AXISPY_ENV_FILE", str(base / ".env")), override=False)
+        file_handler = configure_file_logging()
+        LOG.info("axispy starting")
         if args.config is None:
             args.config = os.environ.get("AXISPY_CONFIG")
             if args.config is None and (base / "config.toml").is_file():
@@ -567,6 +591,11 @@ def main():
         # Avoid logging requests exception URLs, which may contain network details.
         LOG.error("Controller stopped (%s): %s", type(exc).__name__, str(exc) if not isinstance(exc, requests.RequestException) else "Camera connection or authentication failed")
         return 1
+    finally:
+        if file_handler is not None:
+            LOG.info("axispy stopped")
+            LOG.removeHandler(file_handler)
+            file_handler.close()
     return 0
 
 

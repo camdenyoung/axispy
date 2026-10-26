@@ -43,6 +43,32 @@ docker compose up -d --build
 
 The image is built locally for the Pi's architecture; no x86 image or prebuilt image download is assumed. For a TLS inspection proxy during image builds, Dockerfile accepts an optional BuildKit secret named `build_ca` containing the trusted CA PEM (for example, `docker build --secret id=build_ca,src=/path/to/ca.pem -t axispy .`). It is used only during dependency installation and is not retained in the image; TLS verification stays enabled. Standard 64-bit Raspberry Pi OS is the target. 32-bit Pi OS is not validated and may require additional build dependencies.
 
+### Persistent logs on the Pi
+
+The application logs to both the console (`docker compose logs -f`) and a rotating file. Compose mounts `./logs` on the Pi at `/var/log/axispy` inside the container, and writes `axispy.log` there. Docker creates the host directory if needed. No shell inside the container is required:
+
+```sh
+tail -F logs/axispy.log
+# Include current and rotated logs when diagnosing earlier problems:
+ls -lh logs/axispy.log*
+```
+
+If you pre-create a custom host log directory, it must be writable by the container’s root user. With the default capability restrictions, a directory owned by a different user and writable only by that user will fail. For a dedicated log directory, initialize it with `sudo mkdir -p logs`, `sudo chown root:root logs`, and `sudo chmod 755 logs` (adjust the path for `AXIS_LOG_DIR`). Docker normally creates the default directory with suitable ownership automatically.
+
+Log entries have UTC timestamps. Files append across container recreation and reboot; the default rotation keeps the current file plus three backups of up to 10 MiB each (roughly 40 MiB total). Backups are `axispy.log.1` (newest) through `axispy.log.3`. Reading and rotation use the bind mount even though the rest of the container filesystem is read-only. The container's root user creates the files; on typical Raspberry Pi OS they are readable by other users, but host permissions/umask can require `sudo tail -F logs/axispy.log`.
+
+Optional `.env` settings:
+
+```dotenv
+AXIS_LOG_DIR=./logs
+AXIS_LOG_MAX_BYTES=10485760
+AXIS_LOG_BACKUP_COUNT=3
+```
+
+`AXIS_LOG_DIR` changes the host directory and can be an absolute path; Compose fixes the container file to `/var/log/axispy/axispy.log`. For native executable/source use, set `AXIS_LOG_FILE=/path/to/axispy.log` to enable file logging. File logging is optional outside Compose. File-size and backup-count settings must be positive integers. An unwritable log location causes a clear startup error rather than silently dropping the requested persistent log. Logs are not automatically migrated from Docker's old console log history.
+
+After updating the code or settings, run `docker compose up -d --build --force-recreate`. Keep `.env` private; log contents include camera names, status and error details, with existing credential redaction. Do not configure two controller instances to write the same rotating file.
+
 ### Slow focus responses
 
 Focus commands default to a 2-second response timeout, while the connection/PTZ timeout remains 0.5 seconds. Set `AXIS_FOCUS_TIMEOUT=3.0` in `.env` for a slower camera (range 0.1–10 seconds); the effective focus read timeout is never shorter than `AXIS_TIMEOUT`. Recreate the container to apply `.env` changes. Identical held-focus requests are coalesced with watchdog refreshes twice per second, and autofocus is disabled once per focus hold. Release/reversal requests are sent immediately; a synchronous HTTP request already in progress can still delay polling until its timeout. A `ReadTimeout` means a response did not arrive in time; it does not prove the camera rebooted or lost its network connection. After a timed-out movement, the controller attempts a stop immediately and requires centering/releasing controls before resuming. A failed stop retains the normal reconnect backoff.

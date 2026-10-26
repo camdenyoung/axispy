@@ -916,3 +916,52 @@ def test_custom_hold_duration_threshold_and_repeat(duration):
     holds.release(0)
     assert holds.update({0}, 100) == []
     assert holds.update({0}, 100 + duration) == [0]
+
+
+def test_persistent_file_logs_append_with_utc_timestamps(tmp_path, monkeypatch, caplog):
+    import axispy
+    path = tmp_path / 'logs' / 'axispy.log'
+    monkeypatch.setenv('AXIS_LOG_FILE', str(path))
+    for message in ('first run', 'second run'):
+        handler = axispy.configure_file_logging()
+        try:
+            axispy.LOG.info(message)
+        finally:
+            axispy.LOG.removeHandler(handler)
+            handler.close()
+    text = path.read_text()
+    assert 'Z INFO: first run' in text
+    assert 'Z INFO: second run' in text
+    assert 'second run' in caplog.text  # Console/root handlers still receive logs.
+
+
+def test_file_log_rotation_is_bounded(tmp_path, monkeypatch):
+    import axispy
+    path = tmp_path / 'axispy.log'
+    monkeypatch.setenv('AXIS_LOG_FILE', str(path))
+    monkeypatch.setenv('AXIS_LOG_MAX_BYTES', '150')
+    monkeypatch.setenv('AXIS_LOG_BACKUP_COUNT', '2')
+    handler = axispy.configure_file_logging()
+    try:
+        for i in range(30):
+            axispy.LOG.info('rotation sample %s %s', i, 'x' * 40)
+    finally:
+        axispy.LOG.removeHandler(handler)
+        handler.close()
+    assert {item.name for item in tmp_path.iterdir()} == {'axispy.log', 'axispy.log.1', 'axispy.log.2'}
+    assert 'rotation sample 29' in path.read_text()
+
+
+def test_file_logging_is_optional(monkeypatch):
+    import axispy
+    monkeypatch.delenv('AXIS_LOG_FILE', raising=False)
+    assert axispy.configure_file_logging() is None
+
+
+@pytest.mark.parametrize('key,value', [('AXIS_LOG_MAX_BYTES', '0'), ('AXIS_LOG_BACKUP_COUNT', '0'), ('AXIS_LOG_MAX_BYTES', 'invalid')])
+def test_invalid_file_log_settings(tmp_path, monkeypatch, key, value):
+    import axispy
+    monkeypatch.setenv('AXIS_LOG_FILE', str(tmp_path / 'axispy.log'))
+    monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError):
+        axispy.configure_file_logging()
