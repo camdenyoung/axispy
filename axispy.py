@@ -148,6 +148,8 @@ class Camera:
         self.timeout = timeout
         self.watchdog = watchdog
         self.focus_active = False
+        self.dashboard = None
+        self.dashboard_index = None
         self.focus_timeout = max(timeout, focus_timeout)
         self.last_ptz = None
         self.last_focus = None
@@ -197,6 +199,8 @@ class Camera:
             self.focus_active = focus != 0
             self.last_focus = focus
             self.focus_sent_at = self.clock()
+        if self.dashboard:
+            self.dashboard.command_result(self.dashboard_index, True, "manual" if focus else None)
 
     def enable_autofocus(self):
         if self.focus_active:
@@ -204,6 +208,8 @@ class Camera:
             self.focus_active = False
             self.last_focus = 0
         self._request({"camera": self.channel, "autofocus": "on"}, read_timeout=self.focus_timeout)
+        if self.dashboard:
+            self.dashboard.command_result(self.dashboard_index, True, "auto")
 
     def _request(self, params, read_timeout=None):
         response = self.session.get(self.url, params=params,
@@ -286,6 +292,9 @@ class Controller:
         return True
 
     def _failed(self, index, exc):
+        dashboard = getattr(self.cameras[index], "dashboard", None)
+        if dashboard:
+            dashboard.command_result(index, False)
         status = getattr(getattr(exc, "response", None), "status_code", None)
         reason = str(exc) if isinstance(exc, CameraCommandError) else (f"HTTP {status}" if status else type(exc).__name__)
         if self.failure_reason.get(index) != reason:
@@ -408,6 +417,7 @@ def run(args):
     pygame.joystick.init()
     cameras = []
     controller = None
+    dashboard = None
     joystick = None
     running = True
 
@@ -435,6 +445,18 @@ def run(args):
             for config in settings.cameras:
                 cameras.append(Camera(config, settings.timeout, settings.continuous_timeout, settings.focus_timeout))
             controller = Controller(cameras)
+            if os.environ.get("AXIS_WEB_ENABLED", "false").lower() in ("true", "1"):
+                from axispy_web import Dashboard
+                port = int(os.environ.get("AXIS_WEB_PORT", "8080"))
+                if not 1 <= port <= 65535:
+                    raise ValueError("AXIS_WEB_PORT must be between 1 and 65535")
+                dashboard = Dashboard(settings.cameras, controller,
+                                      host=os.environ.get("AXIS_WEB_HOST", "127.0.0.1"),
+                                      port=port, timeout=max(settings.timeout, settings.focus_timeout))
+                for i, camera in enumerate(cameras):
+                    camera.dashboard = dashboard
+                    camera.dashboard_index = i
+                dashboard.start()
             LOG.info("Selected %s; waiting for joystick and camera readiness", cameras[0].name)
         holds = CameraButtonHolds(settings.autofocus_hold_seconds if settings else 5.0)
         manual_focus_blocked = False
@@ -449,6 +471,8 @@ def run(args):
                     LOG.warning("Joystick disconnected; stopping camera and waiting for USB")
                     joystick.quit()
                     joystick = None
+                    if dashboard:
+                        dashboard.set_joystick(None)
                     if controller:
                         controller.stop()
                     waiting_logged = True
@@ -486,6 +510,8 @@ def run(args):
                                 raise ValueError("Button index out of range; run --inspect")
                         joystick = candidate
                         LOG.info("Joystick connected: %s; center joystick and release focus buttons to enable movement", joystick.get_name())
+                        if dashboard:
+                            dashboard.set_joystick(joystick.get_name())
                         if controller:
                             holds.reset(i for i, button in enumerate(settings.joystick["camera_buttons"]) if joystick.get_button(button))
                             manual_focus_blocked = False
@@ -516,6 +542,8 @@ def run(args):
                         LOG.warning("Joystick read failed; stopping camera and waiting for USB")
                         joystick.quit()
                         joystick = None
+                        if dashboard:
+                            dashboard.set_joystick(None)
                         controller.stop()
                         next_connect = time.monotonic() + 2
                         waiting_logged = True
@@ -539,6 +567,8 @@ def run(args):
     finally:
         if controller:
             controller.stop()
+        if dashboard:
+            dashboard.stop()
         for camera in cameras:
             camera.close()
         pygame.quit()

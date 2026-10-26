@@ -1,5 +1,7 @@
 # Raspberry Pi deployment
 
+For the v0.2 web dashboard, use the `web-dashboard-v2` branch and follow [WEB_DASHBOARD.md](WEB_DASHBOARD.md) for a separate checkout and rollback instructions. The original `main` branch stays unchanged.
+
 Recommended: Raspberry Pi OS **64-bit** (`uname -m` should print `aarch64`), with the T8311 plugged directly into the Pi and network access to all four cameras. The Pi needs no graphical desktop. Camera connectivity, USB access, and actual PTZ behavior must be tested on the Pi.
 
 ## Docker Compose (recommended)
@@ -7,7 +9,7 @@ Recommended: Raspberry Pi OS **64-bit** (`uname -m` should print `aarch64`), wit
 Install Docker Engine and the Compose plugin using the [official Debian instructions](https://docs.docker.com/engine/install/debian/) for your OS version. Enable Docker at boot with `sudo systemctl enable --now docker`. Run these commands with an account allowed to use Docker (or prefix Docker commands with `sudo`).
 
 ```sh
-git clone https://github.com/camdenyoung/axispy.git
+git clone --branch web-dashboard-v2 https://github.com/camdenyoung/axispy.git
 cd axispy
 cp .env.example .env
 chmod 600 .env
