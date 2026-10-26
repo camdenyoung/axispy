@@ -285,3 +285,40 @@ def test_failed_commands_do_not_suppress_background_outage_evidence(web_config):
         now[0] = moment
         dashboard.probe(0, session)
     assert dashboard.snapshot()['cameras'][0]['online'] is False
+
+
+def test_health_failure_logs_reason_duration_and_recovery_without_spam(web_config, caplog):
+    now = [0.]
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]), clock=lambda: now[0])
+    session = Mock()
+    def timeout(*_, **__):
+        now[0] += 2
+        raise requests.ReadTimeout('private-example-password must never be printed')
+    session.get.side_effect = timeout
+    with caplog.at_level(logging.INFO, logger='axispy'):
+        dashboard.probe(0, session)
+        dashboard.probe(0, session)
+        assert caplog.text.count('health check failed') == 1
+        assert 'ReadTimeout after 2.00s' in caplog.text
+        assert 'private-example-password' not in caplog.text
+        assert 'ReadTimeout' in dashboard.snapshot()['cameras'][0]['status_note']
+        now[0] = 65
+        dashboard.probe(0, session)
+        assert caplog.text.count('health check failed') == 2
+        session.get.side_effect = None
+        session.get.return_value = response()
+        dashboard.probe(0, session)
+        dashboard.probe(0, session)
+        assert caplog.text.count('health check recovered') == 1
+
+
+def test_superseded_probe_failure_is_still_logged(web_config, caplog):
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]))
+    session = Mock()
+    def timeout(*_, **__):
+        dashboard.command_result(0, True)
+        raise requests.ReadTimeout()
+    session.get.side_effect = timeout
+    dashboard.probe(0, session)
+    assert dashboard.snapshot()['cameras'][0]['online'] is True
+    assert 'health check failed: ReadTimeout' in caplog.text

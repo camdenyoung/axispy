@@ -58,6 +58,8 @@ class Dashboard:
         self.finished = threading.Event()
         self.joystick = None
         self.command_revision = [0] * len(configs)
+        self.probe_errors = [None] * len(configs)
+        self.probe_log_at = [0.] * len(configs)
         self.states = [dict(id=i, name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
                             checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None)
                        for i, c in enumerate(configs)]
@@ -95,8 +97,27 @@ class Dashboard:
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
 
+    def _probe_diagnostic(self, index, reason, started):
+        now = self.clock()
+        elapsed = max(0., now - started)
+        with self.guard:
+            previous = self.probe_errors[index]
+            report_failure = reason is not None and (reason != previous or now - self.probe_log_at[index] >= 60)
+            report_recovery = reason is None and previous is not None
+            self.probe_errors[index] = reason
+            if report_failure:
+                self.probe_log_at[index] = now
+        # Report even if a newer command superseded this check's status update.
+        # Never log raw request exception strings or camera response bodies.
+        if report_failure:
+            self.logger.warning("%s health check failed: %s after %.2fs (connect/read timeouts %.2f/%.2fs)",
+                                self.configs[index]["name"], reason, elapsed, *self.timeout)
+        elif report_recovery:
+            self.logger.info("%s health check recovered after %.2fs", self.configs[index]["name"], elapsed)
+
     def probe(self, index, session):
         config = self.configs[index]
+        started = self.clock()
         with self.guard:
             revision = self.command_revision[index]
         response = None
@@ -110,6 +131,7 @@ class Dashboard:
             if response.status_code != 200 or body.lower().startswith(("error", "<")) or not any(key in values for key in ("pan", "tilt", "zoom", "focus", "autofocus")):
                 raise ValueError("Camera did not return VAPIX position status")
             mode = {"on": "auto", "off": "manual"}.get(values.get("autofocus", "").strip().lower())
+            self._probe_diagnostic(index, None, started)
             with self.guard:
                 if revision != self.command_revision[index]:
                     return  # A newer control response supersedes this probe.
@@ -121,6 +143,7 @@ class Dashboard:
         except (requests.RequestException, ValueError) as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             reason = f"HTTP {status}" if status else (str(exc) if isinstance(exc, ValueError) else type(exc).__name__)
+            self._probe_diagnostic(index, reason, started)
             with self.guard:
                 if revision != self.command_revision[index]:
                     return
@@ -138,8 +161,8 @@ class Dashboard:
                     if offline:
                         state["online"] = False
                     state.update(checked_at=timestamp(), error=reason, consecutive_failures=failures,
-                                 status_note="No camera response confirmed" if offline else
-                                 f"Health check delayed ({failures} consecutive failures); confirming connectivity")
+                                 status_note=f"No camera response confirmed ({reason})" if offline else
+                                 f"Health check delayed ({reason}; {failures} consecutive {'failure' if failures == 1 else 'failures'}); confirming connectivity")
 
     def _monitor(self, index):
         config = self.configs[index]
