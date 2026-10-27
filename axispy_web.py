@@ -92,7 +92,8 @@ class Dashboard:
         self.probe_errors = [None] * len(configs)
         self.probe_log_at = [0.] * len(configs)
         self.states = [dict(id=i, name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
-                            checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None)
+                            checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None,
+                            ptz_activity="unknown")
                        for i, c in enumerate(configs)]
         self.logger = logging.getLogger("axispy")
         self.logs = LiveLogs([os.environ.get(c["password_env"], "") for c in configs])
@@ -109,22 +110,25 @@ class Dashboard:
         state.update(online=True, checked_at=timestamp(), last_seen=timestamp(),
                      consecutive_failures=0, status_note=None)
 
-    def command_result(self, index, online, focus=None):
+    def command_result(self, index, online, focus=None, ptz_active=None):
         with self.guard:
             state = self.states[index]
             if not online:
                 # A rejected/slow control command is not proof of a network outage.
                 state["control_error"] = "Control request failed; see Debug logs"
+                state["ptz_activity"] = "unknown"
                 return
             self.command_revision[index] += 1
             self._reachable(index)
             state.update(error=None, control_error=None)
+            if ptz_active is not None:
+                state["ptz_activity"] = "active" if ptz_active else "idle"
             if focus is not None:
                 state.update(focus=focus, focus_source="command", focus_updated_at=timestamp())
 
     def snapshot(self):
         with self.guard:
-            return dict(version="0.2.2", time=timestamp(), selected=self.controller.selected,
+            return dict(version="0.2.3", time=timestamp(), selected=self.controller.selected,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
 

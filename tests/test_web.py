@@ -173,6 +173,51 @@ def test_http_dashboard_selection_focus_joystick_and_no_credentials(running_dash
     assert get(dashboard, '/api/status').json()['armed'] is False
 
 
+def test_ptz_activity_tracks_commands_stops_selection_and_failures(running_dashboard):
+    dashboard, controller, _ = running_dashboard
+
+    def activity(index=0):
+        return get(dashboard, '/api/status').json()['cameras'][index]['ptz_activity']
+
+    assert activity() == 'unknown'
+    controller.send(STOP)  # Initial safety stop.
+    controller.send(STOP)  # Arm locally.
+    assert activity() == 'idle'
+    for motion in [(25, 0, 0, 0), (0, -30, 0, 0), (0, 0, 20, 0)]:
+        controller.send(motion)
+        assert activity() == 'active'
+    # A read-only probe must not turn an active command into Idle.
+    with requests.Session() as session:
+        session.trust_env = False
+        dashboard.probe(0, session)
+    assert activity() == 'active'
+    controller.send(STOP)
+    assert activity() == 'idle'
+    controller.send((0, 0, 0, 30))
+    assert activity() == 'idle'  # Focus alone is not PTZ.
+    controller.select(1)
+    assert activity(0) == activity(1) == 'idle'
+    controller.send(STOP)
+    controller.send((10, 0, 0, 0))
+    assert activity(1) == 'active'
+    camera = controller.cameras[1]
+    original_move = camera.move
+    camera.move = Mock(side_effect=requests.ConnectionError())
+    try:
+        controller.send(STOP)
+        assert activity(1) == 'unknown'  # Failed stop is not Idle.
+        dashboard.command_result(1, True, 'auto')
+        assert activity(1) == 'unknown'  # Focus success doesn't confirm a stop.
+        with requests.Session() as session:
+            session.trust_env = False
+            dashboard.probe(1, session)
+        assert activity(1) == 'unknown'
+    finally:
+        camera.move = original_move
+    controller.stop()
+    assert activity(1) == 'idle'
+
+
 def test_http_live_logs_and_routes(running_dashboard, caplog):
     dashboard, _, _ = running_dashboard
     with caplog.at_level(logging.INFO, logger='axispy'):
