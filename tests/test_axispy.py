@@ -1020,3 +1020,66 @@ def test_first_selection_of_unknown_camera_preserves_safety_stop():
     cameras[1].move.assert_not_called()
     cameras[3].move.assert_not_called()
     assert not controller.armed
+
+
+def test_reselecting_idle_camera_does_not_repeat_stop_commands():
+    camera = Mock()
+    controller = Controller([camera])
+    controller.send(STOP)
+    controller.send(STOP)
+    camera.move.reset_mock()
+    for _ in range(10):
+        controller.select(0)
+        controller.send(STOP)
+    camera.move.assert_not_called()
+    assert controller.armed
+    controller.stop()  # Explicit shutdown stop remains unconditional.
+    camera.move.assert_called_once_with(STOP)
+
+
+@pytest.mark.parametrize('index', [0, 1])
+def test_runtime_reselect_button_does_not_send_idle_lens_request(camera_environment, monkeypatch, index):
+    import axispy
+    import signal
+    import sys
+    from types import SimpleNamespace
+    clock, frame = [0.], [0]
+    fake = Mock()
+    fake.error = type('SDLError', (Exception,), {})
+    fake.JOYDEVICEREMOVED, fake.JOYBUTTONDOWN, fake.JOYAXISMOTION, fake.JOYBUTTONUP = 1, 2, 3, 4
+    device = Mock()
+    device.get_numaxes.return_value = 3
+    device.get_numbuttons.return_value = 6
+    device.get_instance_id.return_value = 42
+    device.get_axis.return_value = 0.
+    device.get_button.side_effect = lambda button: button == index and frame[0] in (3, 5)
+    fake.joystick.get_count.return_value = 1
+    fake.joystick.Joystick.return_value = device
+    handlers = {}
+    monkeypatch.setattr(signal, 'signal', lambda sig, handler: handlers.setdefault(sig, handler))
+    def events():
+        frame[0] += 1
+        if frame[0] in (3, 5):
+            return [SimpleNamespace(type=2, instance_id=42, button=index)]
+        if frame[0] in (4, 6):
+            return [SimpleNamespace(type=4, instance_id=42, button=index)]
+        if frame[0] == 8:
+            handlers[signal.SIGTERM]()
+        return []
+    fake.event.get.side_effect = events
+    monkeypatch.setitem(sys.modules, 'pygame', fake)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(axispy.time, 'sleep', lambda _: clock.__setitem__(0, clock[0] + .2))
+    cameras = [Mock() for _ in range(4)]
+    sent = []
+    for i, camera in enumerate(cameras):
+        camera.move.side_effect = lambda motion, i=i: sent.append((frame[0], i, motion))
+    monkeypatch.setattr(axispy, 'Camera', Mock(side_effect=cameras))
+    axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
+    assert not any(moment == 5 for moment, _, _ in sent)
+    if index == 0:
+        assert not any(moment == 3 for moment, _, _ in sent)
+    else:
+        assert (3, 1, STOP) in sent  # First contact still performs the safety stop.
+    for camera in cameras:
+        camera.enable_autofocus.assert_not_called()

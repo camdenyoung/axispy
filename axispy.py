@@ -349,6 +349,8 @@ class Controller:
             # state only; repeating zoom=0 can provoke autofocus on some firmware.
             self.armed = True
             return
+        if motion == STOP and self.selected not in self.may_be_moving:
+            return  # Already stopped; repeated neutral samples must not touch the lens.
         self._move(self.selected, motion if self.armed else STOP)
 
     def maintain_stop(self):
@@ -491,8 +493,10 @@ def run(args):
                         print(f"axis {event.axis}: {event.value:+.3f}", flush=True)
                 elif event.type == pygame.JOYBUTTONDOWN:
                     if event.button in settings.joystick["camera_buttons"]:
+                        previous_selection = controller.selected
                         controller.select(settings.joystick["camera_buttons"].index(event.button))
-                        last_motion = None
+                        if controller.selected != previous_selection:
+                            last_motion = None
                 elif event.type == pygame.JOYBUTTONUP:
                     if event.button in settings.joystick["camera_buttons"]:
                         holds.release(settings.joystick["camera_buttons"].index(event.button))
