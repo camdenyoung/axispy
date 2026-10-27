@@ -1,6 +1,6 @@
 # axispy v0.2 — web dashboard
 
-This version is maintained on **`web-dashboard-v2`**. The stable **`main`** branch remains v0.1 and is not changed by this release. The joystick mappings, manual focus, hold-to-autofocus, environment configuration and persistent log files remain available.
+This version is now available on **`main`**, following the merge of `web-dashboard-v2`. The original controller is preserved at tag **`v0.1.0`**; the initial dashboard release is preserved at **`v0.2.0`**. The joystick mappings, manual focus, hold-to-autofocus, environment configuration and persistent log files remain available.
 
 ## Try v0.2 without replacing the current checkout
 
@@ -9,7 +9,7 @@ On the Pi, stop the existing controller with `docker compose down` from its curr
 Create a separate v0.2 checkout:
 
 ```sh
-git clone --branch web-dashboard-v2 https://github.com/camdenyoung/axispy.git axispy-v2
+git clone --branch main https://github.com/camdenyoung/axispy.git axispy-v2
 cd axispy-v2
 ```
 
