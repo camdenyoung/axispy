@@ -29,6 +29,23 @@ def response(body='pan=0\ntilt=0\nzoom=1\nautofocus=on', status=200):
     return result
 
 
+@pytest.mark.parametrize('value,expected', [(None, 1000), ('', 1000), ('  ', 1000), ('250', 250), ('100', 100), ('60000', 60000)])
+def test_browser_poll_interval_environment(web_config, monkeypatch, value, expected):
+    monkeypatch.delenv('AXIS_WEB_POLL_INTERVAL_MS', raising=False)
+    if value is not None:
+        monkeypatch.setenv('AXIS_WEB_POLL_INTERVAL_MS', value)
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]))
+    assert dashboard.snapshot()['poll_interval_ms'] == expected
+    assert dashboard.interval == 5  # Browser polling must not change camera probes.
+
+
+@pytest.mark.parametrize('value', ['0', '-1', '99', '60001', '250.5', 'fast'])
+def test_invalid_browser_poll_interval(web_config, monkeypatch, value):
+    monkeypatch.setenv('AXIS_WEB_POLL_INTERVAL_MS', value)
+    with pytest.raises(ValueError, match='AXIS_WEB_POLL_INTERVAL_MS'):
+        Dashboard(web_config, Controller([Mock() for _ in range(4)]))
+
+
 def test_status_probe_is_read_only_and_reports_focus(web_config):
     dashboard = Dashboard(web_config, Controller([Mock() for _ in range(4)]))
     session = Mock()
