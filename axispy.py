@@ -83,6 +83,10 @@ class Settings:
                 raw = os.environ.get(f"AXIS_J{i}_{key.upper()}")
                 if raw is not None:
                     camera[key] = int(raw) if key == "channel" else raw
+            for axis in ("pan", "tilt", "zoom"):
+                raw = os.environ.get(f"AXIS_J{i}_MAX_{axis.upper()}")
+                if raw is not None and raw.strip():
+                    camera[f"max_{axis}"] = int(raw)
         j = data["joystick"]
         cameras = data["cameras"]
         if len(cameras) != 4:
@@ -123,6 +127,10 @@ class Settings:
         if type(watchdog) is not int or not 1 <= watchdog <= 300:
             raise ValueError("continuous_timeout must be an integer from 1 to 300 seconds")
         for camera in cameras:
+            for axis in ("pan", "tilt", "zoom"):
+                key = f"max_{axis}"
+                if key in camera and (type(camera[key]) is not int or not 0 <= camera[key] <= 100):
+                    raise ValueError(f"{camera['name']} {key} must be an integer from 0 to 100")
             url = urlsplit(camera["url"])
             if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
                 raise ValueError("Camera URL must be an http(s) origin without credentials")
@@ -131,6 +139,14 @@ class Settings:
             if type(camera.get("channel", 1)) is not int or camera.get("channel", 1) < 1:
                 raise ValueError("Camera channel must be a positive integer")
         return cls(j, cameras, rate, timeout, watchdog, focus_timeout, autofocus_hold_seconds)
+
+    def motion_config(self, index):
+        config = dict(self.joystick)
+        for axis in ("pan", "tilt", "zoom"):
+            key = f"max_{axis}"
+            if key in self.cameras[index]:
+                config[key] = self.cameras[index][key]
+        return config
 
 
 class CameraCommandError(RuntimeError):
@@ -539,7 +555,7 @@ def run(args):
                     controller.maintain_stop()
                 else:
                     try:
-                        motion = read_motion(joystick, settings.joystick)
+                        motion = read_motion(joystick, settings.motion_config(controller.selected))
                         focus_released = not any(
                             joystick.get_button(button) for button in (
                                 settings.joystick["focus_near_button"],

@@ -1083,3 +1083,43 @@ def test_runtime_reselect_button_does_not_send_idle_lens_request(camera_environm
         assert (3, 1, STOP) in sent  # First contact still performs the safety stop.
     for camera in cameras:
         camera.enable_autofocus.assert_not_called()
+
+
+def test_per_camera_speed_limits_fall_back_to_global(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_MAX_ZOOM', '50')
+    monkeypatch.setenv('AXIS_J1_MAX_ZOOM', '30')
+    monkeypatch.setenv('AXIS_J2_MAX_PAN', '40')
+    monkeypatch.setenv('AXIS_J2_MAX_TILT', '45')
+    settings = Settings.load()
+    joystick = Mock()
+    joystick.get_axis.return_value = 1.
+    joystick.get_button.return_value = False
+    assert read_motion(joystick, settings.motion_config(0)) == (70, -70, 30, 0)
+    assert read_motion(joystick, settings.motion_config(1)) == (40, -45, 50, 0)
+    assert read_motion(joystick, settings.motion_config(2)) == (70, -70, 50, 0)
+    assert settings.joystick['max_zoom'] == 50
+    assert settings.motion_config(0)['max_pan'] == 70  # No other-camera state leaked.
+
+
+@pytest.mark.parametrize('value', ['-1', '101', '1.5', 'invalid'])
+def test_invalid_per_camera_speed(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_J3_MAX_ZOOM', value)
+    with pytest.raises(ValueError):
+        Settings.load()
+
+
+@pytest.mark.parametrize('value', ['0', '100', '', ' '])
+def test_per_camera_speed_bounds_and_blank_fallback(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_J1_MAX_ZOOM', value)
+    expected = int(value) if value.strip() else 50
+    assert Settings.load().motion_config(0)['max_zoom'] == expected
+
+
+def test_per_camera_toml_speed_and_env_precedence(tmp_path, monkeypatch):
+    from pathlib import Path
+    config = tmp_path / 'config.toml'
+    content = Path('config.example.toml').read_text().replace('name = "J1"', 'name = "J1"\nmax_zoom = 25')
+    config.write_text(content)
+    assert Settings.load(str(config)).motion_config(0)['max_zoom'] == 25
+    monkeypatch.setenv('AXIS_J1_MAX_ZOOM', '35')
+    assert Settings.load(str(config)).motion_config(0)['max_zoom'] == 35
