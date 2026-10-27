@@ -965,3 +965,161 @@ def test_invalid_file_log_settings(tmp_path, monkeypatch, key, value):
     monkeypatch.setenv(key, value)
     with pytest.raises(ValueError):
         axispy.configure_file_logging()
+
+
+def test_selecting_already_stopped_cameras_does_not_send_lens_commands(http_camera, monkeypatch):
+    url, received, _ = http_camera
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    cameras = [Camera(dict(name=f'J{i}', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD', channel=i), .5, 2) for i in range(1, 5)]
+    try:
+        controller = Controller(cameras)
+        # Establish a confirmed stop on each camera; unknown cameras retain a
+        # safety stop on first contact, which cannot be skipped safely.
+        controller.send(STOP)
+        controller.send(STOP)
+        for index in range(1, 4):
+            controller.select(index)
+            controller.send(STOP)
+        count = len(received)
+        for index in [0, 1, 2, 3, 0]:
+            controller.select(index)
+            assert not controller.armed
+            controller.send((0, 0, 0, 30))  # Held control cannot arm the new target.
+            controller.send(STOP)
+            assert controller.armed
+        assert len(received) == count
+    finally:
+        for camera in cameras:
+            camera.close()
+
+
+def test_selection_stops_only_moving_old_camera_and_leaves_other_lenses_alone():
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras)
+    controller.send(STOP)
+    controller.send(STOP)
+    controller.select(1)
+    controller.send(STOP)
+    controller.select(0)
+    controller.send(STOP)
+    controller.send((0, 0, 25, 0))
+    for camera in cameras:
+        camera.move.reset_mock()
+    controller.select(1)
+    cameras[0].move.assert_called_once_with(STOP)
+    for camera in cameras[1:]:
+        camera.move.assert_not_called()
+
+
+def test_first_selection_of_unknown_camera_preserves_safety_stop():
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras)
+    controller.send(STOP)
+    controller.select(2)
+    cameras[2].move.assert_called_once_with(STOP)
+    cameras[1].move.assert_not_called()
+    cameras[3].move.assert_not_called()
+    assert not controller.armed
+
+
+def test_reselecting_idle_camera_does_not_repeat_stop_commands():
+    camera = Mock()
+    controller = Controller([camera])
+    controller.send(STOP)
+    controller.send(STOP)
+    camera.move.reset_mock()
+    for _ in range(10):
+        controller.select(0)
+        controller.send(STOP)
+    camera.move.assert_not_called()
+    assert controller.armed
+    controller.stop()  # Explicit shutdown stop remains unconditional.
+    camera.move.assert_called_once_with(STOP)
+
+
+@pytest.mark.parametrize('index', [0, 1])
+def test_runtime_reselect_button_does_not_send_idle_lens_request(camera_environment, monkeypatch, index):
+    import axispy
+    import signal
+    import sys
+    from types import SimpleNamespace
+    clock, frame = [0.], [0]
+    fake = Mock()
+    fake.error = type('SDLError', (Exception,), {})
+    fake.JOYDEVICEREMOVED, fake.JOYBUTTONDOWN, fake.JOYAXISMOTION, fake.JOYBUTTONUP = 1, 2, 3, 4
+    device = Mock()
+    device.get_numaxes.return_value = 3
+    device.get_numbuttons.return_value = 6
+    device.get_instance_id.return_value = 42
+    device.get_axis.return_value = 0.
+    device.get_button.side_effect = lambda button: button == index and frame[0] in (3, 5)
+    fake.joystick.get_count.return_value = 1
+    fake.joystick.Joystick.return_value = device
+    handlers = {}
+    monkeypatch.setattr(signal, 'signal', lambda sig, handler: handlers.setdefault(sig, handler))
+    def events():
+        frame[0] += 1
+        if frame[0] in (3, 5):
+            return [SimpleNamespace(type=2, instance_id=42, button=index)]
+        if frame[0] in (4, 6):
+            return [SimpleNamespace(type=4, instance_id=42, button=index)]
+        if frame[0] == 8:
+            handlers[signal.SIGTERM]()
+        return []
+    fake.event.get.side_effect = events
+    monkeypatch.setitem(sys.modules, 'pygame', fake)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(axispy.time, 'sleep', lambda _: clock.__setitem__(0, clock[0] + .2))
+    cameras = [Mock() for _ in range(4)]
+    sent = []
+    for i, camera in enumerate(cameras):
+        camera.move.side_effect = lambda motion, i=i: sent.append((frame[0], i, motion))
+    monkeypatch.setattr(axispy, 'Camera', Mock(side_effect=cameras))
+    axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
+    assert not any(moment == 5 for moment, _, _ in sent)
+    if index == 0:
+        assert not any(moment == 3 for moment, _, _ in sent)
+    else:
+        assert (3, 1, STOP) in sent  # First contact still performs the safety stop.
+    for camera in cameras:
+        camera.enable_autofocus.assert_not_called()
+
+
+def test_per_camera_speed_limits_fall_back_to_global(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_MAX_ZOOM', '50')
+    monkeypatch.setenv('AXIS_J1_MAX_ZOOM', '30')
+    monkeypatch.setenv('AXIS_J2_MAX_PAN', '40')
+    monkeypatch.setenv('AXIS_J2_MAX_TILT', '45')
+    settings = Settings.load()
+    joystick = Mock()
+    joystick.get_axis.return_value = 1.
+    joystick.get_button.return_value = False
+    assert read_motion(joystick, settings.motion_config(0)) == (70, -70, 30, 0)
+    assert read_motion(joystick, settings.motion_config(1)) == (40, -45, 50, 0)
+    assert read_motion(joystick, settings.motion_config(2)) == (70, -70, 50, 0)
+    assert settings.joystick['max_zoom'] == 50
+    assert settings.motion_config(0)['max_pan'] == 70  # No other-camera state leaked.
+
+
+@pytest.mark.parametrize('value', ['-1', '101', '1.5', 'invalid'])
+def test_invalid_per_camera_speed(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_J3_MAX_ZOOM', value)
+    with pytest.raises(ValueError):
+        Settings.load()
+
+
+@pytest.mark.parametrize('value', ['0', '100', '', ' '])
+def test_per_camera_speed_bounds_and_blank_fallback(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_J1_MAX_ZOOM', value)
+    expected = int(value) if value.strip() else 50
+    assert Settings.load().motion_config(0)['max_zoom'] == expected
+
+
+def test_per_camera_toml_speed_and_env_precedence(tmp_path, monkeypatch):
+    from pathlib import Path
+    config = tmp_path / 'config.toml'
+    content = Path('config.example.toml').read_text().replace('name = "J1"', 'name = "J1"\nmax_zoom = 25')
+    config.write_text(content)
+    assert Settings.load(str(config)).motion_config(0)['max_zoom'] == 25
+    monkeypatch.setenv('AXIS_J1_MAX_ZOOM', '35')
+    assert Settings.load(str(config)).motion_config(0)['max_zoom'] == 35

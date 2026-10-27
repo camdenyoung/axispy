@@ -71,6 +71,21 @@ AXIS_LOG_BACKUP_COUNT=3
 
 After updating the code or settings, run `docker compose up -d --build --force-recreate`. Keep `.env` private; log contents include camera names, status and error details, with existing credential redaction. Do not configure two controller instances to write the same rotating file.
 
+### Matching speeds between cameras
+
+Global `AXIS_MAX_PAN`, `AXIS_MAX_TILT` and `AXIS_MAX_ZOOM` remain the defaults. Optional per-camera settings override them independently:
+
+```dotenv
+AXIS_J1_MAX_ZOOM=30
+AXIS_J2_MAX_ZOOM=50
+AXIS_J1_MAX_PAN=60
+AXIS_J1_MAX_TILT=60
+```
+
+Use J1–J4 with any of the three axes. Values must be integers from 0 to 100; 0 disables that axis for that camera. Unset or blank variables retain a per-camera TOML value if one is configured, otherwise inherit the global value. In TOML, add `max_pan`, `max_tilt` or `max_zoom` to the relevant `[[cameras]]` section. Per-camera environment values override per-camera TOML values; both override global defaults. Recreate the container after changing `.env`.
+
+The same VAPIX percentage does not guarantee the same physical or perceived speed across camera configurations, lenses, zoom positions or firmware. These limits provide manual calibration, not automatic speed synchronization. Start at equivalent zoom positions, use the same joystick deflection, and reduce the faster camera's limit gradually. The example values above are illustrative; no physical calibration has been measured.
+
 ### Slow focus responses
 
 Focus commands default to a 2-second response timeout, while the connection/PTZ timeout remains 0.5 seconds. Set `AXIS_FOCUS_TIMEOUT=3.0` in `.env` for a slower camera (range 0.1–10 seconds); the effective focus read timeout is never shorter than `AXIS_TIMEOUT`. Recreate the container to apply `.env` changes. Identical held-focus requests are coalesced with watchdog refreshes twice per second, and autofocus is disabled once per focus hold. Release/reversal requests are sent immediately; a synchronous HTTP request already in progress can still delay polling until its timeout. A `ReadTimeout` means a response did not arrive in time; it does not prove the camera rebooted or lost its network connection. After a timed-out movement, the controller attempts a stop immediately and requires centering/releasing controls before resuming. A failed stop retains the normal reconnect backoff.

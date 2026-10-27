@@ -37,6 +37,10 @@ The browser updates every second. Four independent background probes check camer
 
 **Online** means a camera has responded to HTTP or accepted a controller command. HTTP authentication errors, busy responses (such as 503), redirects, and unsupported status-query replies are displayed as API errors separately; they do not mean the camera is offline. Control-command failures also appear separately and do not directly toggle connectivity. A single failed network check leaves the previous connectivity state in place, with a confirmation notice. **Offline** requires at least three consecutive failed background network checks and no successful response in the previous 15 seconds. One successful response restores Online immediately and resets the failure count. Before the first successful response, connectivity stays unknown until three failures confirm an outage. The last-response time is displayed, so a delayed check is distinguishable from fresh evidence. This is HTTP connectivity, not an ICMP ping or video-stream check. A read timeout does not prove the camera itself rebooted. Some camera models omit autofocus from their position response; those use the last successful focus command when available. A mode changed outside axispy can only be reflected if the camera reports it.
 
+## Camera selection and autofocus
+
+A short J1–J4 press selects the target without changing autofocus mode. When the old and target cameras are already confirmed stopped, selection and neutral rearming send no additional PTZ/lens commands. This avoids redundant zero-zoom commands that may provoke autofocus adjustments on camera firmware. A camera that is moving, has an unconfirmed stop, or has not yet been contacted still receives the required safety stop. First contact can therefore still produce a lens adjustment; cycling between confirmed-stopped cameras should not. The configured long hold remains the explicit way to re-enable autofocus.
+
 ## Network configuration
 
 Compose publishes port 8080 on the Pi. Optional `.env` settings:

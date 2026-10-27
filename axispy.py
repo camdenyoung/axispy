@@ -83,6 +83,10 @@ class Settings:
                 raw = os.environ.get(f"AXIS_J{i}_{key.upper()}")
                 if raw is not None:
                     camera[key] = int(raw) if key == "channel" else raw
+            for axis in ("pan", "tilt", "zoom"):
+                raw = os.environ.get(f"AXIS_J{i}_MAX_{axis.upper()}")
+                if raw is not None and raw.strip():
+                    camera[f"max_{axis}"] = int(raw)
         j = data["joystick"]
         cameras = data["cameras"]
         if len(cameras) != 4:
@@ -123,6 +127,10 @@ class Settings:
         if type(watchdog) is not int or not 1 <= watchdog <= 300:
             raise ValueError("continuous_timeout must be an integer from 1 to 300 seconds")
         for camera in cameras:
+            for axis in ("pan", "tilt", "zoom"):
+                key = f"max_{axis}"
+                if key in camera and (type(camera[key]) is not int or not 0 <= camera[key] <= 100):
+                    raise ValueError(f"{camera['name']} {key} must be an integer from 0 to 100")
             url = urlsplit(camera["url"])
             if url.scheme not in ("http", "https") or not url.hostname or url.username or url.password or url.query or url.fragment or url.path not in ("", "/"):
                 raise ValueError("Camera URL must be an http(s) origin without credentials")
@@ -131,6 +139,14 @@ class Settings:
             if type(camera.get("channel", 1)) is not int or camera.get("channel", 1) < 1:
                 raise ValueError("Camera channel must be a positive integer")
         return cls(j, cameras, rate, timeout, watchdog, focus_timeout, autofocus_hold_seconds)
+
+    def motion_config(self, index):
+        config = dict(self.joystick)
+        for axis in ("pan", "tilt", "zoom"):
+            key = f"max_{axis}"
+            if key in self.cameras[index]:
+                config[key] = self.cameras[index][key]
+        return config
 
 
 class CameraCommandError(RuntimeError):
@@ -324,14 +340,15 @@ class Controller:
         if index == self.selected:
             return
         self.armed = False
-        stopped = self._move(self.selected, STOP)
+        needs_stop = self.selected in self.stop_required or self.selected in self.may_be_moving
+        stopped = not needs_stop or self._move(self.selected, STOP)
         if not stopped and self.selected in self.may_be_moving:
             LOG.warning("Cannot switch: stop for %s is unconfirmed; retry after reconnection",
                         self.cameras[self.selected].name)
             return
         self.selected = index
-        self.stop_required.add(index)
-        self._move(index, STOP)
+        if index in self.stop_required or index in self.may_be_moving:
+            self._move(index, STOP)
         LOG.info("Selected %s; center joystick and release focus buttons to enable movement", self.cameras[index].name)
 
     def send(self, motion, neutral=True):
@@ -343,8 +360,13 @@ class Controller:
             # A stop is already confirmed; do not flood the camera while
             # waiting for the operator to release/center the controls.
             return
-        if motion == STOP and neutral:
+        if motion == STOP and neutral and not self.armed:
+            # The stop handshake is already confirmed. Arming changes local
+            # state only; repeating zoom=0 can provoke autofocus on some firmware.
             self.armed = True
+            return
+        if motion == STOP and self.selected not in self.may_be_moving:
+            return  # Already stopped; repeated neutral samples must not touch the lens.
         self._move(self.selected, motion if self.armed else STOP)
 
     def maintain_stop(self):
@@ -487,8 +509,10 @@ def run(args):
                         print(f"axis {event.axis}: {event.value:+.3f}", flush=True)
                 elif event.type == pygame.JOYBUTTONDOWN:
                     if event.button in settings.joystick["camera_buttons"]:
+                        previous_selection = controller.selected
                         controller.select(settings.joystick["camera_buttons"].index(event.button))
-                        last_motion = None
+                        if controller.selected != previous_selection:
+                            last_motion = None
                 elif event.type == pygame.JOYBUTTONUP:
                     if event.button in settings.joystick["camera_buttons"]:
                         holds.release(settings.joystick["camera_buttons"].index(event.button))
@@ -531,7 +555,7 @@ def run(args):
                     controller.maintain_stop()
                 else:
                     try:
-                        motion = read_motion(joystick, settings.joystick)
+                        motion = read_motion(joystick, settings.motion_config(controller.selected))
                         focus_released = not any(
                             joystick.get_button(button) for button in (
                                 settings.joystick["focus_near_button"],
