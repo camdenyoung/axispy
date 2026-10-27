@@ -1,4 +1,4 @@
-# axispy v0.2 — web dashboard
+# axispyPTZ v0.2.2 — web dashboard
 
 The v0.2 web dashboard is now on **`main`**. The original controller is preserved by the **`v0.1.0`** tag, and the initial dashboard release by **`v0.2.0`**. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md) for deployment and rollback instructions.
 
