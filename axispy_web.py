@@ -76,6 +76,13 @@ class LiveLogs(logging.Handler):
 
 class Dashboard:
     def __init__(self, configs, controller, host="127.0.0.1", port=8080, timeout=.5, interval=5, clock=None):
+        raw_poll_interval = os.environ.get("AXIS_WEB_POLL_INTERVAL_MS", "").strip()
+        try:
+            self.poll_interval_ms = int(raw_poll_interval or "1000")
+        except ValueError:
+            raise ValueError("AXIS_WEB_POLL_INTERVAL_MS must be an integer from 100 to 60000") from None
+        if not 100 <= self.poll_interval_ms <= 60000:
+            raise ValueError("AXIS_WEB_POLL_INTERVAL_MS must be an integer from 100 to 60000")
         self.configs = configs
         self.controller = controller
         self.host, self.port = host, port
@@ -129,6 +136,7 @@ class Dashboard:
     def snapshot(self):
         with self.guard:
             return dict(version="0.2.3", time=timestamp(), selected=self.controller.selected,
+                        poll_interval_ms=self.poll_interval_ms,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
 
