@@ -6,6 +6,11 @@ services:
     env_file: ${AXISPY_ENV_FILE:-.env}
     environment:
       AXIS_LOG_FILE: /var/log/axispy/axispy.log
+      AXIS_WEB_ENABLED: "true"
+      AXIS_WEB_HOST: 0.0.0.0
+      AXIS_WEB_PORT: "8080"
+    ports:
+      - "${AXIS_WEB_BIND_ADDRESS:-0.0.0.0}:${AXIS_WEB_PORT:-8080}:8080"
     # Mount the directory so USB reconnects are visible without restarting.
     volumes:
       - /dev/input:/dev/input:ro
