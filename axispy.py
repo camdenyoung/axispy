@@ -216,7 +216,8 @@ class Camera:
             self.last_focus = focus
             self.focus_sent_at = self.clock()
         if self.dashboard:
-            self.dashboard.command_result(self.dashboard_index, True, "manual" if focus else None)
+            self.dashboard.command_result(self.dashboard_index, True, "manual" if focus else None,
+                                          ptz_active=any(ptz))
 
     def enable_autofocus(self):
         if self.focus_active:
