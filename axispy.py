@@ -324,14 +324,15 @@ class Controller:
         if index == self.selected:
             return
         self.armed = False
-        stopped = self._move(self.selected, STOP)
+        needs_stop = self.selected in self.stop_required or self.selected in self.may_be_moving
+        stopped = not needs_stop or self._move(self.selected, STOP)
         if not stopped and self.selected in self.may_be_moving:
             LOG.warning("Cannot switch: stop for %s is unconfirmed; retry after reconnection",
                         self.cameras[self.selected].name)
             return
         self.selected = index
-        self.stop_required.add(index)
-        self._move(index, STOP)
+        if index in self.stop_required or index in self.may_be_moving:
+            self._move(index, STOP)
         LOG.info("Selected %s; center joystick and release focus buttons to enable movement", self.cameras[index].name)
 
     def send(self, motion, neutral=True):
@@ -343,8 +344,11 @@ class Controller:
             # A stop is already confirmed; do not flood the camera while
             # waiting for the operator to release/center the controls.
             return
-        if motion == STOP and neutral:
+        if motion == STOP and neutral and not self.armed:
+            # The stop handshake is already confirmed. Arming changes local
+            # state only; repeating zoom=0 can provoke autofocus on some firmware.
             self.armed = True
+            return
         self._move(self.selected, motion if self.armed else STOP)
 
     def maintain_stop(self):

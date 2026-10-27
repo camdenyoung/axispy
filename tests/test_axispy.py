@@ -965,3 +965,58 @@ def test_invalid_file_log_settings(tmp_path, monkeypatch, key, value):
     monkeypatch.setenv(key, value)
     with pytest.raises(ValueError):
         axispy.configure_file_logging()
+
+
+def test_selecting_already_stopped_cameras_does_not_send_lens_commands(http_camera, monkeypatch):
+    url, received, _ = http_camera
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'local-test-only')
+    cameras = [Camera(dict(name=f'J{i}', url=url, username='operator', password_env='TEST_CAMERA_PASSWORD', channel=i), .5, 2) for i in range(1, 5)]
+    try:
+        controller = Controller(cameras)
+        # Establish a confirmed stop on each camera; unknown cameras retain a
+        # safety stop on first contact, which cannot be skipped safely.
+        controller.send(STOP)
+        controller.send(STOP)
+        for index in range(1, 4):
+            controller.select(index)
+            controller.send(STOP)
+        count = len(received)
+        for index in [0, 1, 2, 3, 0]:
+            controller.select(index)
+            assert not controller.armed
+            controller.send((0, 0, 0, 30))  # Held control cannot arm the new target.
+            controller.send(STOP)
+            assert controller.armed
+        assert len(received) == count
+    finally:
+        for camera in cameras:
+            camera.close()
+
+
+def test_selection_stops_only_moving_old_camera_and_leaves_other_lenses_alone():
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras)
+    controller.send(STOP)
+    controller.send(STOP)
+    controller.select(1)
+    controller.send(STOP)
+    controller.select(0)
+    controller.send(STOP)
+    controller.send((0, 0, 25, 0))
+    for camera in cameras:
+        camera.move.reset_mock()
+    controller.select(1)
+    cameras[0].move.assert_called_once_with(STOP)
+    for camera in cameras[1:]:
+        camera.move.assert_not_called()
+
+
+def test_first_selection_of_unknown_camera_preserves_safety_stop():
+    cameras = [Mock() for _ in range(4)]
+    controller = Controller(cameras)
+    controller.send(STOP)
+    controller.select(2)
+    cameras[2].move.assert_called_once_with(STOP)
+    cameras[1].move.assert_not_called()
+    cameras[3].move.assert_not_called()
+    assert not controller.armed
