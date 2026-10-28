@@ -86,7 +86,7 @@ are needed. Hidden tabs pause their streams and resume when visible again if
 video is still enabled. Disabled camera slots never have a preview.
 
 Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requesting
-640×480 at 5 fps with compression 50. The camera must support MJPEG at this
+640×480 at 25 fps by default with compression 50. The camera must support MJPEG at this
 resolution and the configured account must have permission to view video.
 The configured camera channel, username/password, HTTPS verification and optional
 camera CA bundle also apply to video. A camera without MJPEG support or video
@@ -107,3 +107,15 @@ that a stop command succeeded.
 The dashboard has no authentication. Anyone who can reach it can also view the
 relayed video. Keep it on a trusted LAN or behind an authenticated reverse proxy,
 as described above.
+
+### Preview frame rate
+
+The default preview request is 25 fps. To request a different rate, set
+`AXIS_WEB_PREVIEW_FPS=30` in `.env`, then run `docker compose up -d` (or restart
+source/native mode). Whole numbers from 1 to 60 are accepted; unset or blank
+uses 25. Rebuild after updating application code with `docker compose up -d --build`.
+The dashboard labels this as the requested rate; it does not measure delivered
+frames. Actual performance depends on camera MJPEG limits, exposure settings,
+network bandwidth and host/browser load. Reduce the rate if multiple previews
+strain the Pi or network. `AXIS_WEB_POLL_INTERVAL_MS` controls status refresh only
+and does not limit live video frame rate.

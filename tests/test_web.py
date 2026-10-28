@@ -484,8 +484,10 @@ def test_release_version_in_status_and_dashboard(running_dashboard):
 
 
 @pytest.fixture
-def streaming_dashboard(monkeypatch):
+def streaming_dashboard(monkeypatch, request):
     """Real HTTP camera relay with configurable failures and disconnect tracking."""
+    if getattr(request, 'param', None) is not None:
+        monkeypatch.setenv('AXIS_WEB_PREVIEW_FPS', str(request.param))
     received, disconnected = [], threading.Event()
     mode = {'status': 200, 'type': 'multipart/x-mixed-replace; boundary=frame'}
     frame = b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 2048\r\n\r\n' + b'x' * 2048 + b'\r\n'
@@ -532,6 +534,7 @@ def streaming_dashboard(monkeypatch):
         camera_thread.join(timeout=2)
 
 
+@pytest.mark.parametrize('streaming_dashboard', [None, 30, 60], indirect=True)
 def test_mjpeg_relay_digest_channel_disconnect_and_status(streaming_dashboard):
     dashboard, received, disconnected, _, frame = streaming_dashboard
     assert received == []  # Off by default: neither loading page nor polling opens video.
@@ -550,7 +553,7 @@ def test_mjpeg_relay_digest_channel_disconnect_and_status(streaming_dashboard):
         assert disconnected.wait(3), 'Closing the viewer must release the camera stream'
     params = parse_qs(urlsplit(received[-1][0]).query)
     assert urlsplit(received[-1][0]).path == '/axis-cgi/mjpg/video.cgi'
-    assert params == {'camera': ['3'], 'resolution': ['640x480'], 'fps': ['5'], 'compression': ['50']}
+    assert params == {'camera': ['3'], 'resolution': ['640x480'], 'fps': [str(dashboard.preview_fps)], 'compression': ['50']}
     assert received[-1][1].startswith('Digest ')
     assert 'private-stream-password' not in received[-1][1]
 
@@ -591,3 +594,20 @@ def test_mjpeg_uses_separate_verified_session(web_config, monkeypatch):
     assert session.get.call_args.kwargs['allow_redirects'] is False
     handler.send_error.assert_called_once_with(502, 'Camera MJPEG preview unavailable')
     assert handler.close_connection is True
+
+
+@pytest.mark.parametrize('value,expected', [(None, 25), ('', 25), ('  ', 25), ('1', 1), ('30', 30), ('60', 60)])
+def test_preview_frame_rate(web_config, monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv('AXIS_WEB_PREVIEW_FPS', raising=False)
+    else:
+        monkeypatch.setenv('AXIS_WEB_PREVIEW_FPS', value)
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in web_config]))
+    assert dashboard.snapshot()['preview_fps'] == expected
+
+
+@pytest.mark.parametrize('value', ['0', '-1', '61', '25.5', 'fast'])
+def test_invalid_preview_frame_rate(web_config, monkeypatch, value):
+    monkeypatch.setenv('AXIS_WEB_PREVIEW_FPS', value)
+    with pytest.raises(ValueError, match='AXIS_WEB_PREVIEW_FPS'):
+        Dashboard(web_config, Controller([Mock() for _ in web_config]))
