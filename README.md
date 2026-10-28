@@ -1,4 +1,4 @@
-# axispyPTZ v0.2.5 — web dashboard
+# axispyPTZ v0.2.6 — web dashboard
 
 The v0.2 web dashboard is now on **`main`**. The original controller is preserved by the **`v0.1.0`** tag, and the initial dashboard release by **`v0.2.0`**. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md) for deployment and rollback instructions.
 
@@ -113,3 +113,11 @@ using a TOML file; set `enabled = false` on unused entries if preferred.
 
 Restart the source/native process after editing `.env`. For Docker Compose,
 apply changes with `docker compose up -d --build --force-recreate`.
+
+## Live dashboard previews
+
+The dashboard's **Show live video** / **Hide live video** button starts or stops
+MJPEG previews for enabled cameras. Video is off by default; no `.env` changes
+are required. Cameras must support MJPEG and the configured account must have
+video-viewing permission. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md#optional-live-camera-video)
+for compatibility, bandwidth, and access details.
