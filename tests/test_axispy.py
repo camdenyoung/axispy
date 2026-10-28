@@ -1123,3 +1123,114 @@ def test_per_camera_toml_speed_and_env_precedence(tmp_path, monkeypatch):
     assert Settings.load(str(config)).motion_config(0)['max_zoom'] == 25
     monkeypatch.setenv('AXIS_J1_MAX_ZOOM', '35')
     assert Settings.load(str(config)).motion_config(0)['max_zoom'] == 35
+
+
+@pytest.mark.parametrize('enabled_slots', [(1, 2), (2, 4), (4,)])
+def test_disabled_camera_slots(camera_environment, monkeypatch, enabled_slots):
+    for slot in range(1, 5):
+        monkeypatch.setenv(f'AXIS_J{slot}_ENABLED', str(slot in enabled_slots).lower())
+        if slot not in enabled_slots:
+            monkeypatch.delenv(f'AXIS_J{slot}_URL')
+            monkeypatch.delenv(f'AXIS_J{slot}_PASSWORD')
+    settings = Settings.load()
+    assert [c['slot'] for c in settings.cameras] == list(enabled_slots)
+    assert settings.joystick['camera_buttons'] == [slot - 1 for slot in enabled_slots]
+    cameras = [Camera(c, .5, 2) for c in settings.cameras]
+    try:
+        controller = Controller(cameras)
+        assert controller.cameras[controller.selected].name == f'J{enabled_slots[0]}'
+    finally:
+        for camera in cameras:
+            camera.close()
+
+
+@pytest.mark.parametrize('value', ['false', '0', ' FALSE '])
+def test_disabled_camera_skips_unused_settings(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_J3_ENABLED', value)
+    monkeypatch.setenv('AXIS_J3_CHANNEL', 'unused')
+    monkeypatch.setenv('AXIS_J3_MAX_ZOOM', 'unused')
+    assert [c['slot'] for c in Settings.load().cameras] == [1, 2, 4]
+
+
+@pytest.mark.parametrize('value', ['true', '1', '', ' TRUE '])
+def test_camera_enable_defaults_and_values(camera_environment, monkeypatch, value):
+    monkeypatch.setenv('AXIS_J3_ENABLED', value)
+    assert len(Settings.load().cameras) == 4
+
+
+def test_all_cameras_disabled(monkeypatch):
+    for slot in range(1, 5):
+        monkeypatch.setenv(f'AXIS_J{slot}_ENABLED', 'false')
+    with pytest.raises(ValueError, match='At least one camera'):
+        Settings.load()
+
+
+def test_invalid_camera_enabled(camera_environment, monkeypatch):
+    monkeypatch.setenv('AXIS_J2_ENABLED', 'maybe')
+    with pytest.raises(ValueError, match='AXIS_J2_ENABLED'):
+        Settings.load()
+
+
+def test_disabled_camera_toml_and_environment_override(tmp_path, monkeypatch):
+    from pathlib import Path
+    path = tmp_path / 'config.toml'
+    text = Path('config.example.toml').read_text()
+    path.write_text(text.replace('[[cameras]]', '[[cameras]]\nenabled = false', 1))
+    assert [c['slot'] for c in Settings.load(str(path)).cameras] == [2, 3, 4]
+    monkeypatch.setenv('AXIS_J1_ENABLED', 'true')
+    assert len(Settings.load(str(path)).cameras) == 4
+
+
+def test_disabled_buttons_ignored_in_controller_loop(camera_environment, monkeypatch):
+    import signal
+    import sys
+    from types import SimpleNamespace
+    import axispy
+
+    monkeypatch.setenv('AXIS_J1_ENABLED', 'false')
+    monkeypatch.setenv('AXIS_J3_ENABLED', 'false')
+    monkeypatch.setenv('AXIS_J4_MAX_ZOOM', '25')
+    settings = Settings.load()
+    assert settings.motion_config(1)['max_zoom'] == 25
+    fake = Mock()
+    fake.error = RuntimeError
+    fake.JOYDEVICEREMOVED, fake.JOYBUTTONDOWN, fake.JOYBUTTONUP = 1, 2, 3
+    fake.JOYAXISMOTION = 4
+    device = Mock()
+    device.get_numaxes.return_value = 3
+    device.get_numbuttons.return_value = 6
+    device.get_instance_id.return_value = 42
+    device.get_axis.return_value = 0.
+    frame, clock, handlers = [0], [0.], {}
+    # Hold disabled J1/J3 for longer than the autofocus threshold.
+    device.get_button.side_effect = lambda button: button in (0, 2)
+    fake.joystick.get_count.return_value = 1
+    fake.joystick.Joystick.return_value = device
+    monkeypatch.setattr(signal, 'signal', lambda sig, handler: handlers.setdefault(sig, handler))
+    def events():
+        frame[0] += 1
+        if frame[0] in (2, 3, 4):
+            # J4 selects the second enabled camera; disabled J1/J3 must not switch it.
+            return [SimpleNamespace(type=2, instance_id=42, button={2: 3, 3: 0, 4: 2}[frame[0]])]
+        if frame[0] == 12:
+            handlers[signal.SIGTERM]()
+        return []
+    fake.event.get.side_effect = events
+    monkeypatch.setitem(sys.modules, 'pygame', fake)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(axispy.time, 'sleep', lambda _: clock.__setitem__(0, clock[0] + 1))
+    cameras = [Mock(name='J2'), Mock(name='J4')]
+    factory = Mock(side_effect=cameras)
+    monkeypatch.setattr(axispy, 'Camera', factory)
+    controllers = []
+    def controller_factory(cameras):
+        controller = Controller(cameras)
+        controllers.append(controller)
+        return controller
+    monkeypatch.setattr(axispy, 'Controller', controller_factory)
+    axispy.run(SimpleNamespace(list=False, inspect=False, config=None, device=0))
+    assert [call.args[0]['slot'] for call in factory.call_args_list] == [2, 4]
+    assert controllers[0].selected == 1
+    for camera in cameras:
+        camera.enable_autofocus.assert_not_called()
+        camera.close.assert_called_once()

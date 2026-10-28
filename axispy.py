@@ -1,4 +1,4 @@
-"""Read an SDL USB joystick and control four Axis cameras through VAPIX."""
+"""Read an SDL USB joystick and control up to four Axis cameras through VAPIX."""
 from __future__ import annotations
 
 import argparse
@@ -79,6 +79,16 @@ class Settings:
                     continue
                 data["control"][key] = cast(raw)
         for i, camera in enumerate(data["cameras"], 1):
+            raw = os.environ.get(f"AXIS_J{i}_ENABLED", "").strip().lower()
+            if raw and raw not in ("true", "false", "1", "0"):
+                raise ValueError(f"AXIS_J{i}_ENABLED must be true or false")
+            enabled = raw in ("true", "1") if raw else camera.get("enabled", True)
+            if type(enabled) is not bool:
+                raise ValueError(f"J{i} enabled must be true or false")
+            camera["enabled"] = enabled
+            camera["slot"] = i
+            if not enabled:
+                continue
             for key in ("url", "username", "channel", "ca_bundle"):
                 raw = os.environ.get(f"AXIS_J{i}_{key.upper()}")
                 if raw is not None:
@@ -127,6 +137,8 @@ class Settings:
         if type(watchdog) is not int or not 1 <= watchdog <= 300:
             raise ValueError("continuous_timeout must be an integer from 1 to 300 seconds")
         for camera in cameras:
+            if not camera["enabled"]:
+                continue
             for axis in ("pan", "tilt", "zoom"):
                 key = f"max_{axis}"
                 if key in camera and (type(camera[key]) is not int or not 0 <= camera[key] <= 100):
@@ -138,6 +150,11 @@ class Settings:
                 raise ValueError("Each camera needs username and password_env")
             if type(camera.get("channel", 1)) is not int or camera.get("channel", 1) < 1:
                 raise ValueError("Camera channel must be a positive integer")
+        # Keep each enabled camera paired with its original physical J button.
+        j["camera_buttons"] = [button for button, camera in zip(buttons, cameras) if camera["enabled"]]
+        cameras = [camera for camera in cameras if camera["enabled"]]
+        if not cameras:
+            raise ValueError("At least one camera must be enabled")
         return cls(j, cameras, rate, timeout, watchdog, focus_timeout, autofocus_hold_seconds)
 
     def motion_config(self, index):

@@ -66,3 +66,13 @@ Set `AXIS_WEB_HOST=0.0.0.0` for LAN access when appropriate. Source/native mode 
 ## Validation
 
 Automated tests exercise the real HTTP dashboard and a simulated VAPIX camera, selection/focus updates, offline/error responses, unknown focus mode, probe/control races, incremental bounded logs, credential redaction, and route restrictions. Physical Pi USB handling and real-camera reporting still need validation on your hardware.
+
+## Disable unused cameras
+
+Set `AXIS_J3_ENABLED=false` and `AXIS_J4_ENABLED=false` in `.env` to run
+with J1 and J2 only. Disabled cameras are hidden from the dashboard and receive
+no requests; their URLs and passwords are optional. Original J-button mappings
+are preserved, and at least one camera must remain enabled. See
+[README.md](README.md#disable-unused-cameras) for all options.
+Apply Docker changes with `docker compose up -d --build --force-recreate`;
+restart source/native installations.

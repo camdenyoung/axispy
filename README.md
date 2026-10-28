@@ -90,3 +90,26 @@ python -m pytest -q
 Tests cover axis scaling, invalid configuration, the hold button, neutral rearming, camera-switch stop ordering/failure, manual focus and release stopping, shutdown retries, outage backoff, USB reconnects, and real HTTP requests against a local simulated VAPIX endpoint. No test contacts physical cameras. USB mappings have been confirmed from user-supplied inspection output; real camera authentication, mechanical movement, and firmware timeout behavior still require hardware validation.
 
 To develop in the cloud, use the existing checkout; no additional Git worktree is needed. `axispy --list` exercises SDL discovery even when no USB device is passed through. Run the controller itself on a host with both joystick access and camera connectivity.
+
+## Disable unused cameras
+
+All four camera slots are enabled by default, preserving existing configurations.
+For a two-camera setup using J1 and J2, add to `.env`:
+
+```dotenv
+AXIS_J3_ENABLED=false
+AXIS_J4_ENABLED=false
+```
+
+Each `AXIS_Jn_ENABLED` accepts `true`/`false` or `1`/`0` (unset or blank
+uses the TOML `enabled` value, or defaults to enabled). At least one slot must
+remain enabled. Disabled cameras need no URL or password, receive no control
+commands or background health checks, and are hidden from the web dashboard.
+Their J buttons, including long holds for autofocus, are ignored. Enabled slots
+keep their original J numbers and joystick button assignments: enabling only J2
+and J4 still uses J2 and J4, and startup selects J2. Per-camera speed overrides
+also stay with their original slots. Keep all four slot entries in TOML when
+using a TOML file; set `enabled = false` on unused entries if preferred.
+
+Restart the source/native process after editing `.env`. For Docker Compose,
+apply changes with `docker compose up -d --build --force-recreate`.

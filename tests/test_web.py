@@ -444,3 +444,34 @@ def test_health_checks_use_fresh_tcp_connections_without_changing_cadence(web_co
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_dashboard_with_nonconsecutive_enabled_slots(monkeypatch):
+    from axispy import Settings
+    for slot in range(1, 5):
+        monkeypatch.setenv(f'AXIS_J{slot}_ENABLED', str(slot in (2, 4)).lower())
+    for slot in (2, 4):
+        monkeypatch.setenv(f'AXIS_J{slot}_URL', 'http://127.0.0.1')
+        monkeypatch.setenv(f'AXIS_J{slot}_PASSWORD', 'test-only')
+    settings = Settings.load()
+    cameras = [Camera(c, .5, 2) for c in settings.cameras]
+    controller = Controller(cameras)
+    dashboard = Dashboard(settings.cameras, controller, port=0)
+    try:
+        # Prevent outbound camera probes while exercising the status endpoint.
+        monkeypatch.setattr(dashboard, 'probe', Mock())
+        dashboard.start()
+        data = get(dashboard, '/api/status').json()
+        assert [c['slot'] for c in data['cameras']] == [2, 4]
+        assert data['cameras'][data['selected']]['name'] == 'J2'
+        controller.selected = 1
+        data = get(dashboard, '/api/status').json()
+        assert data['cameras'][data['selected']]['slot'] == 4
+        assert data['cameras'][1]['selected'] is True
+        assert 'test-only' not in get(dashboard, '/api/status').text
+        html = get(dashboard, '/').text
+        assert "'J'+c.slot" in html
+    finally:
+        dashboard.stop()
+        for camera in cameras:
+            camera.close()

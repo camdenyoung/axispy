@@ -127,3 +127,13 @@ The build uses a virtual environment internally, but the resulting executable do
 Existing process environment overrides `.env`; environment settings override TOML; built-in defaults supply the confirmed joystick mapping. Native executables load `.env` and optional `config.toml` beside the executable; source installations use the working directory. `AXISPY_ENV_FILE` can select another dotenv path, and `AXISPY_CONFIG` or `--config` can select a TOML file. Explicitly requested missing TOML files fail rather than silently falling back.
 
 The HTTP tests and container/executable smoke checks do not validate real camera movement, authentication or watchdog behavior. Complete the low-speed hardware checks in README.md before leaving the controller unattended.
+
+## Disable unused cameras
+
+Set `AXIS_J3_ENABLED=false` and `AXIS_J4_ENABLED=false` in `.env` to run
+with J1 and J2 only. Disabled cameras are hidden from the dashboard and receive
+no requests; their URLs and passwords are optional. Original J-button mappings
+are preserved, and at least one camera must remain enabled. See
+[README.md](README.md#disable-unused-cameras) for all options.
+Apply Docker changes with `docker compose up -d --build --force-recreate`;
+restart source/native installations.

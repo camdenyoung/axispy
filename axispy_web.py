@@ -98,7 +98,7 @@ class Dashboard:
         self.command_revision = [0] * len(configs)
         self.probe_errors = [None] * len(configs)
         self.probe_log_at = [0.] * len(configs)
-        self.states = [dict(id=i, name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
+        self.states = [dict(id=i, slot=c.get("slot", i + 1), name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
                             checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None,
                             ptz_activity="unknown")
                        for i, c in enumerate(configs)]
