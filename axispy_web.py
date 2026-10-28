@@ -98,7 +98,7 @@ class Dashboard:
         self.command_revision = [0] * len(configs)
         self.probe_errors = [None] * len(configs)
         self.probe_log_at = [0.] * len(configs)
-        self.states = [dict(id=i, name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
+        self.states = [dict(id=i, slot=c.get("slot", i + 1), name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
                             checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None,
                             ptz_activity="unknown")
                        for i, c in enumerate(configs)]
@@ -135,7 +135,7 @@ class Dashboard:
 
     def snapshot(self):
         with self.guard:
-            return dict(version="0.2.4", time=timestamp(), selected=self.controller.selected,
+            return dict(version="0.2.5", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
