@@ -481,3 +481,113 @@ def test_release_version_in_status_and_dashboard(running_dashboard):
     dashboard, _, _ = running_dashboard
     assert get(dashboard, '/api/status').json()['version'] == '0.2.5'
     assert 'v0.2.5</small>' in get(dashboard, '/').text
+
+
+@pytest.fixture
+def streaming_dashboard(monkeypatch):
+    """Real HTTP camera relay with configurable failures and disconnect tracking."""
+    received, disconnected = [], threading.Event()
+    mode = {'status': 200, 'type': 'multipart/x-mixed-replace; boundary=frame'}
+    frame = b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 2048\r\n\r\n' + b'x' * 2048 + b'\r\n'
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            received.append((self.path, self.headers.get('Authorization')))
+            if not self.headers.get('Authorization', '').startswith('Digest '):
+                self.send_response(401)
+                self.send_header('WWW-Authenticate', 'Digest realm="camera", nonce="test", qop="auth"')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
+            self.send_response(mode['status'])
+            self.send_header('Content-Type', mode['type'])
+            self.end_headers()
+            try:
+                if mode['status'] != 200 or not mode['type'].startswith('multipart/'):
+                    self.wfile.write(b'private-stream-password upstream internal details')
+                    return
+                while True:
+                    self.wfile.write(frame)
+                    self.wfile.flush()
+                    time.sleep(.01)
+            except (BrokenPipeError, ConnectionResetError):
+                disconnected.set()
+        def log_message(self, *_):
+            pass
+    camera_server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    camera_server.daemon_threads = True
+    camera_thread = threading.Thread(target=camera_server.serve_forever, daemon=True)
+    camera_thread.start()
+    monkeypatch.setenv('TEST_STREAM_PASSWORD', 'private-stream-password')
+    config = dict(name='J4', slot=4, url=f'http://127.0.0.1:{camera_server.server_port}',
+                  username='operator', password_env='TEST_STREAM_PASSWORD', channel=3)
+    dashboard = Dashboard([config], Controller([Mock()]), port=0)
+    monkeypatch.setattr(dashboard, 'probe', Mock())
+    dashboard.start()
+    try:
+        yield dashboard, received, disconnected, mode, frame
+    finally:
+        dashboard.stop()
+        camera_server.shutdown()
+        camera_server.server_close()
+        camera_thread.join(timeout=2)
+
+
+def test_mjpeg_relay_digest_channel_disconnect_and_status(streaming_dashboard):
+    dashboard, received, disconnected, _, frame = streaming_dashboard
+    assert received == []  # Off by default: neither loading page nor polling opens video.
+    assert get(dashboard, '/').status_code == 200
+    assert get(dashboard, '/api/status').status_code == 200
+    assert received == []
+    with requests.Session() as session:
+        session.trust_env = False
+        with session.get(f'http://127.0.0.1:{dashboard.port}/api/stream/0', stream=True, timeout=2) as stream:
+            assert stream.status_code == 200
+            assert stream.headers['Content-Type'] == 'multipart/x-mixed-replace; boundary=frame'
+            assert stream.headers['Cache-Control'] == 'no-store'
+            assert stream.raw.read(len(frame)) == frame
+            # A live stream must not block dashboard/status requests.
+            assert get(dashboard, '/api/status').json()['cameras'][0]['slot'] == 4
+        assert disconnected.wait(3), 'Closing the viewer must release the camera stream'
+    params = parse_qs(urlsplit(received[-1][0]).query)
+    assert urlsplit(received[-1][0]).path == '/axis-cgi/mjpg/video.cgi'
+    assert params == {'camera': ['3'], 'resolution': ['640x480'], 'fps': ['5'], 'compression': ['50']}
+    assert received[-1][1].startswith('Digest ')
+    assert 'private-stream-password' not in received[-1][1]
+
+
+@pytest.mark.parametrize('status,kind', [(401, 'text/plain'), (302, 'text/html'), (503, 'text/plain'),
+                                        (200, 'text/html'), (200, 'multipart/x-mixed-replace')])
+def test_mjpeg_errors_do_not_leak_upstream_details(streaming_dashboard, status, kind):
+    dashboard, _, _, mode, _ = streaming_dashboard
+    mode.update(status=status, type=kind)
+    result = get(dashboard, '/api/stream/0')
+    assert result.status_code == 502
+    assert 'private-stream-password' not in result.text
+    assert 'upstream internal details' not in result.text
+
+
+@pytest.mark.parametrize('path', ['/api/stream/-1', '/api/stream/1', '/api/stream/999999',
+                                  '/api/stream/no', '/api/stream/0/other',
+                                  '/api/stream/0?url=http://example.com'])
+def test_mjpeg_only_relays_configured_enabled_cameras(streaming_dashboard, path):
+    dashboard, received, _, _, _ = streaming_dashboard
+    assert get(dashboard, path).status_code == 404
+    assert received == []
+
+
+def test_mjpeg_uses_separate_verified_session(web_config, monkeypatch):
+    config = dict(web_config[0], ca_bundle='/certs/camera.pem')
+    dashboard = Dashboard([config], Controller([Mock()]))
+    session = Mock()
+    session.__enter__ = Mock(return_value=session)
+    session.__exit__ = Mock(return_value=False)
+    session.get.side_effect = requests.ConnectTimeout('private-example-password internal URL')
+    monkeypatch.setattr(requests, 'Session', Mock(return_value=session))
+    handler = Mock()
+    dashboard.stream(0, handler)
+    assert session.trust_env is False
+    assert session.verify == '/certs/camera.pem'
+    assert isinstance(session.auth, requests.auth.HTTPDigestAuth)
+    assert session.get.call_args.kwargs['allow_redirects'] is False
+    handler.send_error.assert_called_once_with(502, 'Camera MJPEG preview unavailable')
+    assert handler.close_connection is True

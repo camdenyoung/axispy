@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -220,6 +221,48 @@ class Dashboard:
                 self.probe(index, session)
             self.finished.wait(self.interval)
 
+    def stream(self, index, handler):
+        """Relay MJPEG without sharing the control or health-check sessions."""
+        config = self.configs[index]
+        started = False
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                session.verify = config.get("ca_bundle", True)
+                session.auth = HTTPDigestAuth(config["username"], os.environ[config["password_env"]])
+                with session.get(config["url"].rstrip("/") + "/axis-cgi/mjpg/video.cgi",
+                                 params={"camera": config.get("channel", 1), "resolution": "640x480",
+                                         "fps": 5, "compression": 50},
+                                 stream=True, timeout=(2, 5), allow_redirects=False) as response:
+                    kind = response.headers.get("Content-Type", "")
+                    # Only relay MJPEG. Do not forward camera errors, redirects,
+                    # credentials, or arbitrary upstream headers to the browser.
+                    if response.status_code != 200 or not re.fullmatch(
+                            r'multipart/x-mixed-replace[ \t]*;[ \t]*boundary=(?:[A-Za-z0-9_./=-]{1,100}|"[A-Za-z0-9_./= -]{1,100}")',
+                            kind, re.IGNORECASE):
+                        handler.send_error(502, "Camera MJPEG preview unavailable")
+                        return
+                    handler.send_response(200)
+                    handler.send_header("Content-Type", kind)
+                    handler.send_header("Cache-Control", "no-store")
+                    handler.send_header("X-Content-Type-Options", "nosniff")
+                    handler.send_header("Connection", "close")
+                    handler.end_headers()
+                    started = True
+                    for chunk in response.iter_content(chunk_size=1024):
+                        if self.finished.is_set():
+                            break
+                        if chunk:
+                            handler.wfile.write(chunk)
+                            handler.wfile.flush()
+        except requests.RequestException:
+            if not started:
+                handler.send_error(502, "Camera MJPEG preview unavailable")
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass  # Turning previews off or closing a tab disconnects the viewer.
+        finally:
+            handler.close_connection = True
+
     def start(self):
         dashboard = self
         class Handler(BaseHTTPRequestHandler):
@@ -227,6 +270,19 @@ class Dashboard:
                 parsed = urlsplit(self.path)
                 if parsed.path == "/":
                     payload, kind = HTML.encode(), "text/html; charset=utf-8"
+                elif parsed.path.startswith("/api/stream/"):
+                    camera_id = parsed.path.removeprefix("/api/stream/")
+                    if not camera_id.isascii() or not camera_id.isdecimal() or len(camera_id) > 3:
+                        self.send_error(404)
+                        return
+                    index = int(camera_id)
+                    if index >= len(dashboard.configs) or parsed.query:
+                        self.send_error(404)
+                        return
+                    # Bound writes to slow/disconnected viewers as well as camera reads.
+                    self.connection.settimeout(5)
+                    dashboard.stream(index, self)
+                    return
                 elif parsed.path == "/api/status":
                     payload, kind = json.dumps(dashboard.snapshot()).encode(), "application/json"
                 elif parsed.path == "/api/logs":

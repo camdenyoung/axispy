@@ -76,3 +76,34 @@ are preserved, and at least one camera must remain enabled. See
 [README.md](README.md#disable-unused-cameras) for all options.
 Apply Docker changes with `docker compose up -d --build --force-recreate`;
 restart source/native installations.
+
+## Optional live camera video
+
+Click **Show live video** in the dashboard header to show a live preview on each
+enabled camera card. Click **Hide live video** to stop the streams. Video starts
+off in every browser tab and returns to off after a reload; no `.env` changes
+are needed. Hidden tabs pause their streams and resume when visible again if
+video is still enabled. Disabled camera slots never have a preview.
+
+Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requesting
+640×480 at 5 fps with compression 50. The camera must support MJPEG at this
+resolution and the configured account must have permission to view video.
+The configured camera channel, username/password, HTTPS verification and optional
+camera CA bundle also apply to video. A camera without MJPEG support or video
+permission shows a preview error; PTZ control and health checks continue.
+Toggle video off and back on to retry a failed stream.
+
+The dashboard relays video through the existing Python server using independent
+connections, so camera credentials stay on the server and the browser needs no
+direct access to the cameras. No transcoder, RTSP gateway, or extra container is
+required on ARM64 or x86-64 Linux. Turning video off or leaving the page closes
+the viewer connections; stalled camera reads and slow viewer writes have bounded
+timeouts. Each visible tab opens one stream per enabled camera, so extra tabs
+increase camera and network load. MJPEG uses more bandwidth than H.264; validate
+performance with your cameras and Pi before operational use. Previews have no
+audio, and displayed frames are not proof that a camera is currently moving or
+that a stop command succeeded.
+
+The dashboard has no authentication. Anyone who can reach it can also view the
+relayed video. Keep it on a trusted LAN or behind an authenticated reverse proxy,
+as described above.
