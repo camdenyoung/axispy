@@ -479,8 +479,8 @@ def test_dashboard_with_nonconsecutive_enabled_slots(monkeypatch):
 
 def test_release_version_in_status_and_dashboard(running_dashboard):
     dashboard, _, _ = running_dashboard
-    assert get(dashboard, '/api/status').json()['version'] == '0.2.5'
-    assert 'v0.2.5</small>' in get(dashboard, '/').text
+    assert get(dashboard, '/api/status').json()['version'] == '0.2.6'
+    assert 'v0.2.6</small>' in get(dashboard, '/').text
 
 
 @pytest.fixture
