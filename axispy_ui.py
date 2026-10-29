@@ -92,7 +92,7 @@ HTML = r'''<!doctype html>
   .grid.video-enabled .camera .preview-placeholder{width:min(100cqw,calc(100cqh * 16 / 9));height:auto;aspect-ratio:16/9;max-height:100%}
  }
 }
-</style></head><body><main><div class="dashboard"><header class="dashboard-header"><div class="brand"><h1>axis<span>py</span>PTZ <small class="muted" style="font-size:13px;letter-spacing:0">v0.2.7</small></h1><p class="eyebrow">Camera control desk</p></div><div class="usage-slot"><section id="resources" class="resources" aria-label="Host resource usage" hidden>
+</style></head><body><main><div class="dashboard"><header class="dashboard-header"><div class="brand"><h1>axis<span>py</span>PTZ <small class="muted" style="font-size:13px;letter-spacing:0">v0.2.8</small></h1><p class="eyebrow">Camera control desk</p></div><div class="usage-slot"><section id="resources" class="resources" aria-label="Host resource usage" hidden>
 <div class="resource"><h2>Host CPU usage</h2><strong id="cpuUsage">Measuring…</strong><meter id="cpuMeter" min="0" max="100" value="0" aria-label="Host CPU usage" hidden></meter><div class="status">Across all CPU cores</div></div>
 <div class="resource"><h2>Host memory usage</h2><strong id="memoryUsage">Measuring…</strong><meter id="memoryMeter" min="0" max="100" value="0" aria-label="Host memory usage" hidden></meter><div class="status" id="memoryDetail">Used / total RAM</div></div>
 </section></div><div class="actions"><button id="usageButton" aria-expanded="false" aria-controls="resources">Show system usage</button><button id="videoButton" aria-pressed="false" aria-controls="cameras">Show live video</button><button id="debugButton" aria-expanded="false" aria-controls="debug">Debug logs</button></div></header>
