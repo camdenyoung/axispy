@@ -86,7 +86,7 @@ are needed. Hidden tabs pause their streams and resume when visible again if
 video is still enabled. Disabled camera slots never have a preview.
 
 Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requesting
-640×480 at 25 fps by default with compression 50. The camera must support MJPEG at this
+640×360 (16:9) at 25 fps by default with compression 50. The camera must support MJPEG at this
 resolution and the configured account must have permission to view video.
 The configured camera channel, username/password, HTTPS verification and optional
 camera CA bundle also apply to video. Disconnected cameras show a **Camera Offline** placeholder once health checks
@@ -126,8 +126,9 @@ and does not limit live video frame rate.
 
 The dashboard shows **Host CPU usage** and **Host memory usage**, including used
 and total RAM. Use **Hide system usage** / **Show system usage** in the header
-to hide or show both panels. They start hidden in each tab, including after a
-reload. These are statistics for the Linux host running axispy (your Pi or
+to hide or show both readings between the app name and the header buttons.
+Their space is reserved, so toggling them does not move the camera cards. They
+start hidden in each tab, including after a reload. These are statistics for the Linux host running axispy (your Pi or
 x86-64 Linux machine), including other applications on that host. In a VM, the
 host is the Linux VM. They are not measurements of the cameras or browser, and
 do not represent Docker container usage or its configured resource limits.
@@ -142,3 +143,58 @@ second across viewers, and refreshed with normal dashboard status polling.
 No new Python dependencies, Docker mounts, privileges, or `.env` settings are
 needed. If the platform does not expose these statistics, the dashboard displays
 **Unavailable** while camera monitoring and control continue normally.
+
+## Responsive live-preview layout
+
+All camera counts use the same 600px and 1280px column boundaries. Preview
+positions follow the available card space:
+
+| Viewport width | 1 camera | 2 cameras | 3 cameras | 4 cameras | Preview position |
+| --- | --- | --- | --- | --- | --- |
+| Below 600px | 1 column | 1 column | 1 column | 1 column | Below details |
+| 600–1280px | 1 column | 2 columns | 2 columns | 2 columns | Right of details |
+| 1281–1439px | 1 column | 2 columns | 3 columns | 4 columns | Right for 1–2 cameras; below for 3–4 |
+| 1440px and above | 1 column | 2 columns | 3 columns | 4 columns | Below details; single camera stays on the right |
+
+Two-camera previews remain on the right through intermediate desktop widths,
+avoiding a full-width preview jump between 1280px and the 1440px desktop layout.
+These column counts apply with video on or off. Live previews and offline
+placeholders share the same 16:9 sizing. Preview layout changes do not restart
+working streams. On narrow screens, text wraps and normal page scrolling remains
+available.
+
+At desktop sizes of at least 1440 pixels wide and 720 pixels high, the header,
+selected-camera panel, cards and footer fill one viewport. This separate height
+fitting rule does not change preview positions or column counts. Frames scale to
+fit without cropping or stretching. Header system usage reserves its space, so
+showing or hiding it does not move the cards. Debug logs open below the desk and
+remain scrollable.
+
+Optional browser regression check (requires Playwright and Chromium):
+
+```sh
+python tests/browser_dashboard_layout.py
+```
+
+## Preview quality
+
+Set `AXIS_WEB_PREVIEW_QUALITY` in `.env` to choose the requested 16:9 MJPEG
+resolution for all enabled camera previews:
+
+| Value | Resolution |
+| --- | --- |
+| `low` (default) | 640×360 |
+| `medium` | 1280×720 (HD) |
+| `high` | 1920×1080 (Full HD) |
+
+For example, `AXIS_WEB_PREVIEW_QUALITY=medium` requests 720p. Unset or blank uses
+`low`; values are case-insensitive. Invalid values fail at startup with a clear
+configuration error. The configured camera must support MJPEG at the selected
+resolution. The dashboard scales the full frame to fit without cropping or
+stretching; the requested resolution does not change card sizing.
+
+After editing `.env`, run `docker compose up -d` (or restart source/native mode).
+Rebuild after updating code with `docker compose up -d --build`. Refresh the
+browser after updating. Higher quality uses more bandwidth and camera/host/browser
+resources, especially with several previews. Frame rate remains independently
+controlled by `AXIS_WEB_PREVIEW_FPS`.
