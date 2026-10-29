@@ -23,6 +23,16 @@ HTML = r'''<!doctype html>
  .grid.video-enabled[data-camera-count="1"] .camera{display:grid;grid-template-columns:minmax(180px,0.8fr) minmax(0,1.2fr);gap:16px;align-items:start}
  .grid.video-enabled[data-camera-count="1"] .preview{margin-top:0;min-width:0}
 }
+/* Two wide live cards can keep 16:9 video below their details. On medium
+   screens, place details beside video; use full-width cards on tablets. */
+@media(min-width:600px) and (max-width:1199px){
+ .grid.video-enabled[data-camera-count="2"]{grid-template-columns:minmax(0,1fr)}
+ .grid.video-enabled[data-camera-count="2"] .camera{display:grid;grid-template-columns:minmax(180px,0.8fr) minmax(0,1.2fr);gap:16px;align-items:start}
+ .grid.video-enabled[data-camera-count="2"] .preview{margin-top:0;min-width:0}
+}
+@media(max-width:599px){
+ .grid.video-enabled[data-camera-count="2"]{grid-template-columns:minmax(0,1fr)}
+}
 /* Header metrics reserve their space, so toggling them never moves the desk. */
 .dashboard-header{min-height:80px}
 .brand{flex-shrink:0}
@@ -61,10 +71,9 @@ HTML = r'''<!doctype html>
  .grid.video-enabled .camera .preview img,
  .grid.video-enabled .camera .preview-placeholder{grid-row:1;width:100%;height:100%;min-height:0;max-height:none;aspect-ratio:auto;object-fit:contain}
  .grid.video-enabled .camera .preview .note{grid-row:2;margin:0}
- .grid.video-enabled[data-camera-count="1"] .camera,
- .grid.video-enabled[data-camera-count="2"] .camera{align-items:stretch;grid-template-rows:minmax(0,1fr)}
- .grid.video-enabled[data-camera-count="1"] .preview,
- .grid.video-enabled[data-camera-count="2"] .preview{margin-top:0}
+ .grid.video-enabled[data-camera-count="1"] .camera{align-items:stretch;grid-template-rows:minmax(0,1fr)}
+ .grid.video-enabled[data-camera-count="1"] .preview{margin-top:0}
+ .grid.video-enabled[data-camera-count="2"] .camera{display:flex;flex-direction:column;align-items:stretch;gap:0}
  #alert:empty{display:none}
  .footer{margin-top:14px;flex:none}
 }

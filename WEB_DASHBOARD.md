@@ -149,15 +149,18 @@ needed. If the platform does not expose these statistics, the dashboard displays
 At desktop sizes of at least 1440 pixels wide and 720 pixels high, the header,
 selected-camera panel, camera cards and footer fill one viewport. Cards share
 the available height for all camera counts, with full video frames scaled to fit
-without cropping or stretching. One- and two-camera live cards place details
-beside video; three and four cameras keep details above their previews. Offline
+without cropping or stretching. Single-camera live cards place details
+beside video; two, three and four cameras keep details above their previews. Offline
 placeholders follow the same sizing. Showing or hiding header system usage does
 not change the layout. The Debug logs panel opens below the desk and is scrollable.
 
 A single-camera live preview stays beside its details down to 600 pixels wide,
-and stacks below them only below 600 pixels. Two-camera previews use the
-side-by-side card layout from 1200 pixels wide. Outside the full-viewport desktop
-layout, normal page scrolling is available.
+and stacks below them only below 600 pixels. Two-camera previews place video below the details on wide, full-height desktop
+screens. At medium widths (600–1439 pixels), details sit beside video; below
+1200 pixels the two cards form one full-width column. Below 600 pixels, video
+stacks beneath the details again. Short desktop viewports also retain the
+side-by-side card layout. Outside the full-viewport desktop layout, normal page
+scrolling is available.
 
 ## Preview quality
 
