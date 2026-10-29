@@ -126,7 +126,7 @@ and does not limit live video frame rate.
 
 The dashboard shows **Host CPU usage** and **Host memory usage**, including used
 and total RAM. Use **Hide system usage** / **Show system usage** in the header
-to hide or show both panels. They start visible in each tab, including after a
+to hide or show both panels. They start hidden in each tab, including after a
 reload. These are statistics for the Linux host running axispy (your Pi or
 x86-64 Linux machine), including other applications on that host. In a VM, the
 host is the Linux VM. They are not measurements of the cameras or browser, and
