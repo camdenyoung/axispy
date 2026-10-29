@@ -162,6 +162,12 @@ stacks beneath the details again. Short desktop viewports also retain the
 side-by-side card layout. Outside the full-viewport desktop layout, normal page
 scrolling is available.
 
+For three or four cameras, the grid uses two columns from 1200 to 1280 pixels
+wide and the normal multi-column desktop arrangement above that. Below 1200
+pixels, cards form one full-width column: previews sit on the right from 600 to
+1199 pixels, then below the details under 600 pixels. This also keeps offline
+placeholders consistent with live previews.
+
 ## Preview quality
 
 Set `AXIS_WEB_PREVIEW_QUALITY` in `.env` to choose the requested 16:9 MJPEG

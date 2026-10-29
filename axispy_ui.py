@@ -33,6 +33,17 @@ HTML = r'''<!doctype html>
 @media(max-width:599px){
  .grid.video-enabled[data-camera-count="2"]{grid-template-columns:minmax(0,1fr)}
 }
+/* Three/four cameras use full-width tablet cards, with video to the right
+   until the narrow-phone breakpoint. Wider screens retain multiple columns. */
+@media(max-width:1199px){
+ .grid[data-camera-count="3"],.grid[data-camera-count="4"]{grid-template-columns:minmax(0,1fr)}
+}
+@media(min-width:600px) and (max-width:1199px){
+ .grid.video-enabled[data-camera-count="3"] .camera,
+ .grid.video-enabled[data-camera-count="4"] .camera{display:grid;grid-template-columns:minmax(180px,0.8fr) minmax(0,1.2fr);gap:16px;align-items:start}
+ .grid.video-enabled[data-camera-count="3"] .preview,
+ .grid.video-enabled[data-camera-count="4"] .preview{margin-top:0;min-width:0}
+}
 /* Header metrics reserve their space, so toggling them never moves the desk. */
 .dashboard-header{min-height:80px}
 .brand{flex-shrink:0}
