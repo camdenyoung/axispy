@@ -154,9 +154,10 @@ beside video; three and four cameras keep details above their previews. Offline
 placeholders follow the same sizing. Showing or hiding header system usage does
 not change the layout. The Debug logs panel opens below the desk and is scrollable.
 
-Between 1200 and 1439 pixels wide, one- and two-camera previews retain the
-height-limited side-by-side layout. Smaller screens use stacked cards and normal
-page scrolling.
+A single-camera live preview stays beside its details down to 600 pixels wide,
+and stacks below them only below 600 pixels. Two-camera previews use the
+side-by-side card layout from 1200 pixels wide. Outside the full-viewport desktop
+layout, normal page scrolling is available.
 
 ## Preview quality
 

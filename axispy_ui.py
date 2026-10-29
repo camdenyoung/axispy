@@ -16,6 +16,13 @@ HTML = r'''<!doctype html>
  .grid.video-enabled[data-camera-count="2"] .preview img,
  .grid.video-enabled[data-camera-count="2"] .preview-placeholder{max-height:clamp(200px,calc(100dvh - 440px),560px)}
 }
+.grid[data-camera-count="1"]{grid-template-columns:minmax(0,1fr)}
+/* A single feed has enough room for details beside video from 600px up. */
+@media(min-width:600px) and (max-width:1199px){
+ .grid.video-enabled[data-camera-count="1"]{grid-template-columns:minmax(0,1fr)}
+ .grid.video-enabled[data-camera-count="1"] .camera{display:grid;grid-template-columns:minmax(180px,0.8fr) minmax(0,1.2fr);gap:16px;align-items:start}
+ .grid.video-enabled[data-camera-count="1"] .preview{margin-top:0;min-width:0}
+}
 /* Header metrics reserve their space, so toggling them never moves the desk. */
 .dashboard-header{min-height:80px}
 .brand{flex-shrink:0}
@@ -27,7 +34,7 @@ HTML = r'''<!doctype html>
 .resource meter{height:6px}
 .resource .status{font-size:11px;line-height:1.3;margin-top:4px}
 .dashboard-header .actions{flex-shrink:0}
-@media(max-width:900px){
+@media(max-width:1100px){
  .dashboard-header{flex-wrap:wrap}
  .dashboard-header .usage-slot{order:3;max-width:none;flex-basis:100%;min-width:0}
  .dashboard-header .actions{flex-shrink:1}
