@@ -38,13 +38,13 @@ HTML = r'''<!doctype html>
 @media(max-width:599px){
  .grid[data-camera-count="3"],.grid[data-camera-count="4"]{grid-template-columns:minmax(0,1fr)}
 }
-@media(min-width:600px) and (max-width:1199px){
+@media(min-width:600px) and (max-width:1280px){
  .grid.video-enabled[data-camera-count="3"] .camera,
  .grid.video-enabled[data-camera-count="4"] .camera{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start;padding:12px}
  .grid.video-enabled[data-camera-count="3"] .preview,
  .grid.video-enabled[data-camera-count="4"] .preview{margin-top:0;min-width:0}
 }
-@media(min-width:600px) and (max-width:1199px){
+@media(min-width:600px) and (max-width:1280px){
  .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled .camera-info{min-width:0}
  .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled .top{flex-wrap:wrap;gap:6px}
  .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled h2,

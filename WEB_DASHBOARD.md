@@ -164,7 +164,7 @@ scrolling is available.
 
 For three or four cameras, the grid keeps two cards per row from 600 to 1280
 pixels wide and the normal multi-column desktop arrangement above that. From
-600 to 1199 pixels, each preview sits on the right within its card. Below 600
+600 to 1280 pixels, each preview sits on the right within its card. Below 600
 pixels, cards form one full-width column with previews below the details. This also keeps offline
 placeholders consistent with live previews.
 
