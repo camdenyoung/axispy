@@ -142,3 +142,13 @@ second across viewers, and refreshed with normal dashboard status polling.
 No new Python dependencies, Docker mounts, privileges, or `.env` settings are
 needed. If the platform does not expose these statistics, the dashboard displays
 **Unavailable** while camera monitoring and control continue normally.
+
+## Responsive live-preview layout
+
+With one or two enabled cameras and live video on, desktop viewports at least
+1200 pixels wide place camera details beside each preview. Preview height is
+bounded by viewport height, keeping the full frame visible on a 1080p display
+without cropping or stretching. Offline placeholders use the same sizing.
+Three- and four-camera layouts keep their existing arrangement. Narrower screens
+use the stacked layout with normal page scrolling. Turning live video off returns
+to the standard status-card layout.
