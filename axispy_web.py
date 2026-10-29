@@ -155,6 +155,11 @@ class Dashboard:
             raise ValueError("AXIS_WEB_PREVIEW_FPS must be an integer from 1 to 60") from None
         if not 1 <= self.preview_fps <= 60:
             raise ValueError("AXIS_WEB_PREVIEW_FPS must be an integer from 1 to 60")
+        self.preview_quality = os.environ.get("AXIS_WEB_PREVIEW_QUALITY", "").strip().lower() or "low"
+        resolutions = {"low": "640x360", "medium": "1280x720", "high": "1920x1080"}
+        if self.preview_quality not in resolutions:
+            raise ValueError("AXIS_WEB_PREVIEW_QUALITY must be low, medium or high")
+        self.preview_resolution = resolutions[self.preview_quality]
         self.host_usage = HostUsage()
         self.configs = configs
         self.controller = controller
@@ -211,6 +216,7 @@ class Dashboard:
         with self.guard:
             return dict(system=usage, version="0.2.7", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms, preview_fps=self.preview_fps,
+                        preview_quality=self.preview_quality, preview_resolution=self.preview_resolution,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
 
@@ -304,7 +310,7 @@ class Dashboard:
                 session.verify = config.get("ca_bundle", True)
                 session.auth = HTTPDigestAuth(config["username"], os.environ[config["password_env"]])
                 with session.get(config["url"].rstrip("/") + "/axis-cgi/mjpg/video.cgi",
-                                 params={"camera": config.get("channel", 1), "resolution": "640x480",
+                                 params={"camera": config.get("channel", 1), "resolution": self.preview_resolution,
                                          "fps": self.preview_fps, "compression": 50},
                                  stream=True, timeout=(2, 5), allow_redirects=False) as response:
                     kind = response.headers.get("Content-Type", "")

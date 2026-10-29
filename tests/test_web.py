@@ -486,7 +486,11 @@ def test_release_version_in_status_and_dashboard(running_dashboard):
 @pytest.fixture
 def streaming_dashboard(monkeypatch, request):
     """Real HTTP camera relay with configurable failures and disconnect tracking."""
-    if getattr(request, 'param', None) is not None:
+    if isinstance(getattr(request, 'param', None), tuple):
+        fps, quality = request.param
+        monkeypatch.setenv('AXIS_WEB_PREVIEW_FPS', str(fps))
+        monkeypatch.setenv('AXIS_WEB_PREVIEW_QUALITY', quality)
+    elif getattr(request, 'param', None) is not None:
         monkeypatch.setenv('AXIS_WEB_PREVIEW_FPS', str(request.param))
     received, disconnected = [], threading.Event()
     mode = {'status': 200, 'type': 'multipart/x-mixed-replace; boundary=frame'}
@@ -534,7 +538,7 @@ def streaming_dashboard(monkeypatch, request):
         camera_thread.join(timeout=2)
 
 
-@pytest.mark.parametrize('streaming_dashboard', [None, 30, 60], indirect=True)
+@pytest.mark.parametrize('streaming_dashboard', [None, 30, 60, (25, 'medium'), (25, 'high')], indirect=True)
 def test_mjpeg_relay_digest_channel_disconnect_and_status(streaming_dashboard):
     dashboard, received, disconnected, _, frame = streaming_dashboard
     assert received == []  # Off by default: neither loading page nor polling opens video.
@@ -553,7 +557,7 @@ def test_mjpeg_relay_digest_channel_disconnect_and_status(streaming_dashboard):
         assert disconnected.wait(3), 'Closing the viewer must release the camera stream'
     params = parse_qs(urlsplit(received[-1][0]).query)
     assert urlsplit(received[-1][0]).path == '/axis-cgi/mjpg/video.cgi'
-    assert params == {'camera': ['3'], 'resolution': ['640x480'], 'fps': [str(dashboard.preview_fps)], 'compression': ['50']}
+    assert params == {'camera': ['3'], 'resolution': [dashboard.preview_resolution], 'fps': [str(dashboard.preview_fps)], 'compression': ['50']}
     assert received[-1][1].startswith('Digest ')
     assert 'private-stream-password' not in received[-1][1]
 
@@ -625,3 +629,23 @@ def test_host_usage_in_status_api(running_dashboard, monkeypatch):
     html = get(dashboard, '/').text
     assert 'Host CPU usage' in html
     assert 'Host memory usage' in html
+
+
+@pytest.mark.parametrize('value,quality,resolution', [(None, 'low', '640x360'), ('', 'low', '640x360'),
+    ('  ', 'low', '640x360'), ('low', 'low', '640x360'), ('medium', 'medium', '1280x720'),
+    ('high', 'high', '1920x1080'), (' HIGH ', 'high', '1920x1080')])
+def test_preview_quality(web_config, monkeypatch, value, quality, resolution):
+    if value is None:
+        monkeypatch.delenv('AXIS_WEB_PREVIEW_QUALITY', raising=False)
+    else:
+        monkeypatch.setenv('AXIS_WEB_PREVIEW_QUALITY', value)
+    dashboard = Dashboard(web_config, Controller([Mock() for _ in web_config]))
+    assert dashboard.snapshot()['preview_quality'] == quality
+    assert dashboard.snapshot()['preview_resolution'] == resolution
+
+
+@pytest.mark.parametrize('value', ['ultra', '720p', '640x360'])
+def test_invalid_preview_quality(web_config, monkeypatch, value):
+    monkeypatch.setenv('AXIS_WEB_PREVIEW_QUALITY', value)
+    with pytest.raises(ValueError, match='AXIS_WEB_PREVIEW_QUALITY'):
+        Dashboard(web_config, Controller([Mock() for _ in web_config]))

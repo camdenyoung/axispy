@@ -86,7 +86,7 @@ are needed. Hidden tabs pause their streams and resume when visible again if
 video is still enabled. Disabled camera slots never have a preview.
 
 Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requesting
-640×480 at 25 fps by default with compression 50. The camera must support MJPEG at this
+640×360 (16:9) at 25 fps by default with compression 50. The camera must support MJPEG at this
 resolution and the configured account must have permission to view video.
 The configured camera channel, username/password, HTTPS verification and optional
 camera CA bundle also apply to video. Disconnected cameras show a **Camera Offline** placeholder once health checks
@@ -157,3 +157,26 @@ not change the layout. The Debug logs panel opens below the desk and is scrollab
 Between 1200 and 1439 pixels wide, one- and two-camera previews retain the
 height-limited side-by-side layout. Smaller screens use stacked cards and normal
 page scrolling.
+
+## Preview quality
+
+Set `AXIS_WEB_PREVIEW_QUALITY` in `.env` to choose the requested 16:9 MJPEG
+resolution for all enabled camera previews:
+
+| Value | Resolution |
+| --- | --- |
+| `low` (default) | 640×360 |
+| `medium` | 1280×720 (HD) |
+| `high` | 1920×1080 (Full HD) |
+
+For example, `AXIS_WEB_PREVIEW_QUALITY=medium` requests 720p. Unset or blank uses
+`low`; values are case-insensitive. Invalid values fail at startup with a clear
+configuration error. The configured camera must support MJPEG at the selected
+resolution. The dashboard scales the full frame to fit without cropping or
+stretching; the requested resolution does not change card sizing.
+
+After editing `.env`, run `docker compose up -d` (or restart source/native mode).
+Rebuild after updating code with `docker compose up -d --build`. Refresh the
+browser after updating. Higher quality uses more bandwidth and camera/host/browser
+resources, especially with several previews. Frame rate remains independently
+controlled by `AXIS_WEB_PREVIEW_FPS`.
