@@ -146,14 +146,18 @@ needed. If the platform does not expose these statistics, the dashboard displays
 
 ## Responsive live-preview layout
 
-All camera counts use the same 600px and 1280px layout boundaries:
+All camera counts use the same 600px and 1280px column boundaries. Preview
+positions follow the available card space:
 
 | Viewport width | 1 camera | 2 cameras | 3 cameras | 4 cameras | Preview position |
 | --- | --- | --- | --- | --- | --- |
 | Below 600px | 1 column | 1 column | 1 column | 1 column | Below details |
 | 600–1280px | 1 column | 2 columns | 2 columns | 2 columns | Right of details |
-| Above 1280px | 1 column | 2 columns | 3 columns | 4 columns | Below details; single camera stays on the right |
+| 1281–1439px | 1 column | 2 columns | 3 columns | 4 columns | Right for 1–2 cameras; below for 3–4 |
+| 1440px and above | 1 column | 2 columns | 3 columns | 4 columns | Below details; single camera stays on the right |
 
+Two-camera previews remain on the right through intermediate desktop widths,
+avoiding a full-width preview jump between 1280px and the 1440px desktop layout.
 These column counts apply with video on or off. Live previews and offline
 placeholders share the same 16:9 sizing. Preview layout changes do not restart
 working streams. On narrow screens, text wraps and normal page scrolling remains

@@ -16,7 +16,7 @@ from axispy_ui import HTML
 
 VIEWPORTS = [(width, 900) for width in (
     390, 559, 560, 599, 600, 601, 768, 1100, 1101, 1199, 1200,
-    1280, 1281, 1439, 1440,
+    1280, 1281, 1348, 1349, 1350, 1439, 1440,
 )] + [(1440, 719), (1440, 720), (1920, 1080)]
 
 
@@ -26,7 +26,7 @@ def columns(page):
 
 
 def check_preview_position(page, count, width, selector):
-    expected_right = width >= 600 and (width <= 1280 or count == 1)
+    expected_right = width >= 600 and (width <= 1280 or count == 1 or (count == 2 and width < 1440))
     for index in range(count):
         card = page.locator('.camera').nth(index)
         info = card.locator('.camera-info').bounding_box()
