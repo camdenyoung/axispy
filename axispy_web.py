@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import socket
 import threading
@@ -75,6 +76,69 @@ class LiveLogs(logging.Handler):
             return dict(cursor=self.sequence, entries=[dict(item) for item in self.records if item["id"] > after])
 
 
+class HostUsage:
+    """Nonblocking Linux host metrics, cached across dashboard viewers for 1s."""
+    def __init__(self, proc_root="/proc", clock=None):
+        self.proc_root = Path(proc_root)
+        self.clock = clock or time.monotonic
+        self.guard = threading.Lock()
+        self.sample_at = None
+        self.previous_cpu = None
+        self.values = dict(cpu_percent=None, cpu_status="unavailable", memory=None)
+
+    def snapshot(self):
+        with self.guard:
+            now = self.clock()
+            if self.sample_at is None or now - self.sample_at >= 1:
+                self.sample_at = now
+                self._sample_cpu()
+                self._sample_memory()
+            return dict(self.values, memory=dict(self.values["memory"]) if self.values["memory"] else None)
+
+    def _sample_cpu(self):
+        try:
+            line = (self.proc_root / "stat").read_text().splitlines()[0].split()
+            if line[0] != "cpu" or len(line) < 5:
+                raise ValueError()
+            # guest/guest_nice are already included in user/nice. Exclude them
+            # from the total, and count iowait as idle, like Linux CPU monitors.
+            ticks = [int(value) for value in line[1:9]]
+            if any(value < 0 for value in ticks):
+                raise ValueError()
+            total = sum(ticks)
+            idle = ticks[3] + (ticks[4] if len(ticks) > 4 else 0)
+            previous = self.previous_cpu
+            self.previous_cpu = (total, idle)
+            percent = None
+            if previous is not None:
+                elapsed, idle_elapsed = total - previous[0], idle - previous[1]
+                if elapsed > 0 and 0 <= idle_elapsed <= elapsed:
+                    percent = round(100 * (elapsed - idle_elapsed) / elapsed, 1)
+            self.values.update(cpu_percent=percent, cpu_status="ok" if percent is not None else "measuring")
+        except (OSError, ValueError, IndexError):
+            self.previous_cpu = None
+            self.values.update(cpu_percent=None, cpu_status="unavailable")
+
+    def _sample_memory(self):
+        try:
+            fields = {}
+            for line in (self.proc_root / "meminfo").read_text().splitlines():
+                name, _, raw = line.partition(":")
+                if name in ("MemTotal", "MemAvailable"):
+                    value, unit = raw.split()
+                    if unit != "kB":
+                        raise ValueError()
+                    fields[name] = int(value) * 1024
+            total, available = fields["MemTotal"], fields["MemAvailable"]
+            if total <= 0 or not 0 <= available <= total:
+                raise ValueError()
+            used = total - available
+            self.values["memory"] = dict(used_bytes=used, total_bytes=total,
+                                         percent=round(100 * used / total, 1))
+        except (OSError, ValueError, KeyError):
+            self.values["memory"] = None
+
+
 class Dashboard:
     def __init__(self, configs, controller, host="127.0.0.1", port=8080, timeout=.5, interval=5, clock=None):
         raw_poll_interval = os.environ.get("AXIS_WEB_POLL_INTERVAL_MS", "").strip()
@@ -91,6 +155,7 @@ class Dashboard:
             raise ValueError("AXIS_WEB_PREVIEW_FPS must be an integer from 1 to 60") from None
         if not 1 <= self.preview_fps <= 60:
             raise ValueError("AXIS_WEB_PREVIEW_FPS must be an integer from 1 to 60")
+        self.host_usage = HostUsage()
         self.configs = configs
         self.controller = controller
         self.host, self.port = host, port
@@ -142,8 +207,9 @@ class Dashboard:
                 state.update(focus=focus, focus_source="command", focus_updated_at=timestamp())
 
     def snapshot(self):
+        usage = self.host_usage.snapshot()
         with self.guard:
-            return dict(version="0.2.6", time=timestamp(), selected=self.controller.selected,
+            return dict(system=usage, version="0.2.6", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms, preview_fps=self.preview_fps,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
