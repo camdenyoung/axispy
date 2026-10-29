@@ -33,16 +33,23 @@ HTML = r'''<!doctype html>
 @media(max-width:599px){
  .grid.video-enabled[data-camera-count="2"]{grid-template-columns:minmax(0,1fr)}
 }
-/* Three/four cameras use full-width tablet cards, with video to the right
-   until the narrow-phone breakpoint. Wider screens retain multiple columns. */
-@media(max-width:1199px){
+/* Three/four cameras keep two tablet columns, with video to the right.
+   Only narrow phone screens switch to one column. */
+@media(max-width:599px){
  .grid[data-camera-count="3"],.grid[data-camera-count="4"]{grid-template-columns:minmax(0,1fr)}
 }
 @media(min-width:600px) and (max-width:1199px){
  .grid.video-enabled[data-camera-count="3"] .camera,
- .grid.video-enabled[data-camera-count="4"] .camera{display:grid;grid-template-columns:minmax(180px,0.8fr) minmax(0,1.2fr);gap:16px;align-items:start}
+ .grid.video-enabled[data-camera-count="4"] .camera{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;align-items:start;padding:12px}
  .grid.video-enabled[data-camera-count="3"] .preview,
  .grid.video-enabled[data-camera-count="4"] .preview{margin-top:0;min-width:0}
+}
+@media(min-width:600px) and (max-width:1199px){
+ .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled .camera-info{min-width:0}
+ .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled .top{flex-wrap:wrap;gap:6px}
+ .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled h2,
+ .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled .mode{font-size:16px}
+ .grid:is([data-camera-count="3"],[data-camera-count="4"]).video-enabled .preview-placeholder{font-size:13px;text-align:center;overflow-wrap:anywhere}
 }
 /* Header metrics reserve their space, so toggling them never moves the desk. */
 .dashboard-header{min-height:80px}
