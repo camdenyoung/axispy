@@ -126,8 +126,9 @@ and does not limit live video frame rate.
 
 The dashboard shows **Host CPU usage** and **Host memory usage**, including used
 and total RAM. Use **Hide system usage** / **Show system usage** in the header
-to hide or show both panels. They start hidden in each tab, including after a
-reload. These are statistics for the Linux host running axispy (your Pi or
+to hide or show both readings between the app name and the header buttons.
+Their space is reserved, so toggling them does not move the camera cards. They
+start hidden in each tab, including after a reload. These are statistics for the Linux host running axispy (your Pi or
 x86-64 Linux machine), including other applications on that host. In a VM, the
 host is the Linux VM. They are not measurements of the cameras or browser, and
 do not represent Docker container usage or its configured resource limits.
@@ -145,10 +146,14 @@ needed. If the platform does not expose these statistics, the dashboard displays
 
 ## Responsive live-preview layout
 
-With one or two enabled cameras and live video on, desktop viewports at least
-1200 pixels wide place camera details beside each preview. Preview height is
-bounded by viewport height, keeping the full frame visible on a 1080p display
-without cropping or stretching. Offline placeholders use the same sizing.
-Three- and four-camera layouts keep their existing arrangement. Narrower screens
-use the stacked layout with normal page scrolling. Turning live video off returns
-to the standard status-card layout.
+At desktop sizes of at least 1440 pixels wide and 720 pixels high, the header,
+selected-camera panel, camera cards and footer fill one viewport. Cards share
+the available height for all camera counts, with full video frames scaled to fit
+without cropping or stretching. One- and two-camera live cards place details
+beside video; three and four cameras keep details above their previews. Offline
+placeholders follow the same sizing. Showing or hiding header system usage does
+not change the layout. The Debug logs panel opens below the desk and is scrollable.
+
+Between 1200 and 1439 pixels wide, one- and two-camera previews retain the
+height-limited side-by-side layout. Smaller screens use stacked cards and normal
+page scrolling.

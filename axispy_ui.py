@@ -16,13 +16,58 @@ HTML = r'''<!doctype html>
  .grid.video-enabled[data-camera-count="2"] .preview img,
  .grid.video-enabled[data-camera-count="2"] .preview-placeholder{max-height:clamp(200px,calc(100dvh - 440px),560px)}
 }
-</style></head><body><main><header><div><h1>axis<span>py</span>PTZ <small class="muted" style="font-size:13px;letter-spacing:0">v0.2.7</small></h1><p class="eyebrow">Camera control desk</p></div><div class="actions"><button id="usageButton" aria-expanded="false" aria-controls="resources">Show system usage</button><button id="videoButton" aria-pressed="false" aria-controls="cameras">Show live video</button><button id="debugButton" aria-expanded="false" aria-controls="debug">Debug logs</button></div></header>
-<div class="summary"><div><span class="muted">Currently selected</span><strong id="selected">Waiting for controller…</strong></div><div><div id="joystick">Checking USB joystick…</div><div class="muted status" id="armed" style="margin-top:8px"></div></div></div>
-<section id="resources" class="resources" aria-label="Host resource usage" hidden>
+/* Header metrics reserve their space, so toggling them never moves the desk. */
+.dashboard-header{min-height:80px}
+.brand{flex-shrink:0}
+.usage-slot{flex:1;max-width:460px;min-width:260px;height:80px;margin:0 auto;display:flex;align-items:center}
+.resources{width:100%;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:0}
+.resource{background:none;border:0;border-radius:0;padding:0;min-width:0}
+.resource h2{font-size:12px;margin:0 0 4px}
+.resource strong{font-size:18px;margin:0 0 4px}
+.resource meter{height:6px}
+.resource .status{font-size:11px;line-height:1.3;margin-top:4px}
+.dashboard-header .actions{flex-shrink:0}
+@media(max-width:900px){
+ .dashboard-header{flex-wrap:wrap}
+ .dashboard-header .usage-slot{order:3;max-width:none;flex-basis:100%;min-width:0}
+ .dashboard-header .actions{flex-shrink:1}
+}
+/* A desktop desk fills the viewport; debugging remains below it and scrollable. */
+@media(min-width:1440px) and (min-height:720px){
+ main{padding:24px 28px}
+ .dashboard{height:calc(100dvh - 48px);display:flex;flex-direction:column}
+ .dashboard-header{height:80px;flex:none}
+ .summary{margin:16px 0;padding:16px 20px;flex:none}
+ .summary strong{font-size:22px}
+ #cameras{flex:1;min-height:0;align-items:stretch}
+ .camera{display:flex;flex-direction:column;min-height:0;padding:18px}
+ .camera-info{flex:none;min-width:0}
+ .camera h2{margin:14px 0 8px}
+ .address{min-height:0;margin:10px 0}
+ .activity{margin-top:12px;padding:8px 10px}
+ .detail{padding-top:12px;margin-top:12px}
+ .note{min-height:0}
+ .error:empty{display:none}
+ .camera-info>.note{margin-top:10px}
+ .grid.video-enabled .camera .preview{flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto;gap:8px;margin-top:14px}
+ .grid.video-enabled .camera .preview img,
+ .grid.video-enabled .camera .preview-placeholder{grid-row:1;width:100%;height:100%;min-height:0;max-height:none;aspect-ratio:auto;object-fit:contain}
+ .grid.video-enabled .camera .preview .note{grid-row:2;margin:0}
+ .grid.video-enabled[data-camera-count="1"] .camera,
+ .grid.video-enabled[data-camera-count="2"] .camera{align-items:stretch;grid-template-rows:minmax(0,1fr)}
+ .grid.video-enabled[data-camera-count="1"] .preview,
+ .grid.video-enabled[data-camera-count="2"] .preview{margin-top:0}
+ #alert:empty{display:none}
+ .footer{margin-top:14px;flex:none}
+}
+</style></head><body><main><div class="dashboard"><header class="dashboard-header"><div class="brand"><h1>axis<span>py</span>PTZ <small class="muted" style="font-size:13px;letter-spacing:0">v0.2.7</small></h1><p class="eyebrow">Camera control desk</p></div><div class="usage-slot"><section id="resources" class="resources" aria-label="Host resource usage" hidden>
 <div class="resource"><h2>Host CPU usage</h2><strong id="cpuUsage">Measuring…</strong><meter id="cpuMeter" min="0" max="100" value="0" aria-label="Host CPU usage" hidden></meter><div class="status">Across all CPU cores</div></div>
 <div class="resource"><h2>Host memory usage</h2><strong id="memoryUsage">Measuring…</strong><meter id="memoryMeter" min="0" max="100" value="0" aria-label="Host memory usage" hidden></meter><div class="status" id="memoryDetail">Used / total RAM</div></div>
-</section>
+</section></div><div class="actions"><button id="usageButton" aria-expanded="false" aria-controls="resources">Show system usage</button><button id="videoButton" aria-pressed="false" aria-controls="cameras">Show live video</button><button id="debugButton" aria-expanded="false" aria-controls="debug">Debug logs</button></div></header>
+<div class="summary"><div><span class="muted">Currently selected</span><strong id="selected">Waiting for controller…</strong></div><div><div id="joystick">Checking USB joystick…</div><div class="muted status" id="armed" style="margin-top:8px"></div></div></div>
+
 <div id="cameras" class="grid"></div><div id="alert" role="status" class="alert"></div><div class="footer"><span>Read-only monitor · Use the joystick to control cameras</span><span id="updated">Connecting…</span></div>
+</div>
 <section class="debug" id="debug" hidden><header><h2>Live console log</h2><span class="muted status">Latest 1,000 messages</span></header><pre id="logs" aria-label="Live application logs"></pre></section>
 </main><script>
 const $=id=>document.getElementById(id);let debug=false,cursor=0,lines=[],pollIntervalMs=1000,videoEnabled=false,previewFps=25;
