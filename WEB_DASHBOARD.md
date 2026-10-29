@@ -146,27 +146,31 @@ needed. If the platform does not expose these statistics, the dashboard displays
 
 ## Responsive live-preview layout
 
+All camera counts use the same 600px and 1280px layout boundaries:
+
+| Viewport width | 1 camera | 2 cameras | 3 cameras | 4 cameras | Preview position |
+| --- | --- | --- | --- | --- | --- |
+| Below 600px | 1 column | 1 column | 1 column | 1 column | Below details |
+| 600–1280px | 1 column | 2 columns | 2 columns | 2 columns | Right of details |
+| Above 1280px | 1 column | 2 columns | 3 columns | 4 columns | Below details; single camera stays on the right |
+
+These column counts apply with video on or off. Live previews and offline
+placeholders share the same 16:9 sizing. Preview layout changes do not restart
+working streams. On narrow screens, text wraps and normal page scrolling remains
+available.
+
 At desktop sizes of at least 1440 pixels wide and 720 pixels high, the header,
-selected-camera panel, camera cards and footer fill one viewport. Cards share
-the available height for all camera counts, with full video frames scaled to fit
-without cropping or stretching. Single-camera live cards place details
-beside video; two, three and four cameras keep details above their previews. Offline
-placeholders follow the same sizing. Showing or hiding header system usage does
-not change the layout. The Debug logs panel opens below the desk and is scrollable.
+selected-camera panel, cards and footer fill one viewport. This separate height
+fitting rule does not change preview positions or column counts. Frames scale to
+fit without cropping or stretching. Header system usage reserves its space, so
+showing or hiding it does not move the cards. Debug logs open below the desk and
+remain scrollable.
 
-A single-camera live preview stays beside its details down to 600 pixels wide,
-and stacks below them only below 600 pixels. Two-camera previews place video below the details on wide, full-height desktop
-screens. At medium widths (600–1439 pixels), details sit beside video; below
-1200 pixels the two cards form one full-width column. Below 600 pixels, video
-stacks beneath the details again. Short desktop viewports also retain the
-side-by-side card layout. Outside the full-viewport desktop layout, normal page
-scrolling is available.
+Optional browser regression check (requires Playwright and Chromium):
 
-For three or four cameras, the grid keeps two cards per row from 600 to 1280
-pixels wide and the normal multi-column desktop arrangement above that. From
-600 to 1280 pixels, each preview sits on the right within its card. Below 600
-pixels, cards form one full-width column with previews below the details. This also keeps offline
-placeholders consistent with live previews.
+```sh
+python tests/browser_dashboard_layout.py
+```
 
 ## Preview quality
 
