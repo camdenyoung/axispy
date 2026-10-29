@@ -209,7 +209,7 @@ class Dashboard:
     def snapshot(self):
         usage = self.host_usage.snapshot()
         with self.guard:
-            return dict(system=usage, version="0.2.6", time=timestamp(), selected=self.controller.selected,
+            return dict(system=usage, version="0.2.7", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms, preview_fps=self.preview_fps,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
                         cameras=[dict(state, selected=state["id"] == self.controller.selected) for state in self.states])
