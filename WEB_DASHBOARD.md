@@ -121,3 +121,24 @@ frames. Actual performance depends on camera MJPEG limits, exposure settings,
 network bandwidth and host/browser load. Reduce the rate if multiple previews
 strain the Pi or network. `AXIS_WEB_POLL_INTERVAL_MS` controls status refresh only
 and does not limit live video frame rate.
+
+## Host CPU and memory usage
+
+The dashboard shows **Host CPU usage** and **Host memory usage**, including used
+and total RAM. Use **Hide system usage** / **Show system usage** in the header
+to hide or show both panels. They start hidden in each tab, including after a
+reload. These are statistics for the Linux host running axispy (your Pi or
+x86-64 Linux machine), including other applications on that host. In a VM, the
+host is the Linux VM. They are not measurements of the cameras or browser, and
+do not represent Docker container usage or its configured resource limits.
+
+CPU usage is the busy percentage across all CPU cores between samples; 100%
+means all cores are busy. CPU I/O wait counts as idle. RAM usage is total minus
+Linux `MemAvailable`, so reclaimable file cache is treated as available memory.
+The first CPU reading displays **Measuring…** until a second sample is available.
+
+Metrics are read from Linux `/proc/stat` and `/proc/meminfo`, cached for one
+second across viewers, and refreshed with normal dashboard status polling.
+No new Python dependencies, Docker mounts, privileges, or `.env` settings are
+needed. If the platform does not expose these statistics, the dashboard displays
+**Unavailable** while camera monitoring and control continue normally.

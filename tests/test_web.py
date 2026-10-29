@@ -479,8 +479,8 @@ def test_dashboard_with_nonconsecutive_enabled_slots(monkeypatch):
 
 def test_release_version_in_status_and_dashboard(running_dashboard):
     dashboard, _, _ = running_dashboard
-    assert get(dashboard, '/api/status').json()['version'] == '0.2.6'
-    assert 'v0.2.6</small>' in get(dashboard, '/').text
+    assert get(dashboard, '/api/status').json()['version'] == '0.2.7'
+    assert 'v0.2.7</small>' in get(dashboard, '/').text
 
 
 @pytest.fixture
@@ -611,3 +611,17 @@ def test_invalid_preview_frame_rate(web_config, monkeypatch, value):
     monkeypatch.setenv('AXIS_WEB_PREVIEW_FPS', value)
     with pytest.raises(ValueError, match='AXIS_WEB_PREVIEW_FPS'):
         Dashboard(web_config, Controller([Mock() for _ in web_config]))
+
+
+def test_host_usage_in_status_api(running_dashboard, monkeypatch):
+    dashboard, _, _ = running_dashboard
+    usage = dict(cpu_percent=42.5, cpu_status='ok',
+                 memory=dict(used_bytes=1024**3, total_bytes=4*1024**3, percent=25.0))
+    monkeypatch.setattr(dashboard.host_usage, 'snapshot', lambda: usage)
+    response = get(dashboard, '/api/status')
+    assert response.status_code == 200
+    assert response.json()['system'] == usage
+    assert len(response.json()['cameras']) == 4
+    html = get(dashboard, '/').text
+    assert 'Host CPU usage' in html
+    assert 'Host memory usage' in html
