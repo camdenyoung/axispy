@@ -913,7 +913,69 @@ HTML = r'''
         );
         return box;
       }
+      // Parse multipart frames so we can detect progress ourselves. Native MJPEG
+      // <img> streams can end or stall without firing an error in the browser.
+      class MjpegFrames {
+        constructor(boundary, frame) {
+          this.boundary = new TextEncoder().encode("--" + boundary);
+          this.frame = frame;
+          this.buffer = new Uint8Array();
+          this.scan = 0;
+          this.started = false;
+        }
+        push(chunk) {
+          if (this.buffer.length + chunk.length > 8 * 1024 * 1024)
+            throw Error("Preview frame too large");
+          const joined = new Uint8Array(this.buffer.length + chunk.length);
+          joined.set(this.buffer);
+          joined.set(chunk, this.buffer.length);
+          this.buffer = joined;
+          while (this.scan <= this.buffer.length - this.boundary.length) {
+            let match = true;
+            for (let j = 0; j < this.boundary.length; j++) {
+              if (this.buffer[this.scan + j] !== this.boundary[j]) {
+                match = false;
+                break;
+              }
+            }
+            if (!match) {
+              this.scan++;
+              continue;
+            }
+            if (this.started) {
+              const part = this.buffer.subarray(0, this.scan);
+              let headerEnd = -1;
+              for (let j = 0; j < Math.min(part.length - 3, 16384); j++) {
+                if (
+                  part[j] === 13 &&
+                  part[j + 1] === 10 &&
+                  part[j + 2] === 13 &&
+                  part[j + 3] === 10
+                ) {
+                  headerEnd = j + 4;
+                  break;
+                }
+              }
+              if (headerEnd < 0) throw Error("Invalid preview frame");
+              let end = part.length;
+              if (part[end - 2] === 13 && part[end - 1] === 10) end -= 2;
+              if (end > headerEnd) this.frame(part.slice(headerEnd, end));
+            }
+            this.buffer = this.buffer.slice(this.scan + this.boundary.length);
+            this.scan = 0;
+            this.started = true;
+          }
+        }
+      }
       function stopVideo(box) {
+        const stream = box.videoStream;
+        if (stream) {
+          box.videoStream = null;
+          clearTimeout(stream.retry);
+          clearInterval(stream.watchdog);
+          stream.controller?.abort();
+          if (stream.url) URL.revokeObjectURL(stream.url);
+        }
         const img = box.querySelector(".preview img");
         if (img) {
           img.onload = img.onerror = null;
@@ -927,26 +989,58 @@ HTML = r'''
           note = preview.querySelector(".note");
         const active = videoEnabled && !document.hidden;
         preview.hidden = !active;
-        if (!active) {
-          stopVideo(box);
-          delete preview.dataset.failed;
-          return;
-        }
-        if (box.dataset.online === "false") {
+        if (!active || box.dataset.online === "false") {
           stopVideo(box);
           placeholder.hidden = false;
           placeholder.textContent = "Camera Offline";
           note.textContent = "Waiting for camera connection…";
           return;
         }
-        if (preview.querySelector("img") || preview.dataset.failed) return;
+        if (box.videoStream) return;
+        const stream = { failures: 0, pending: null, loading: false };
+        box.videoStream = stream;
         const img = node("img");
         img.alt = "Live preview · " + box.dataset.name;
         img.hidden = true;
-        placeholder.hidden = false;
-        placeholder.textContent = "Connecting…";
-        note.textContent = "Connecting to live video…";
+        preview.querySelector(".preview-frame").prepend(img);
+        const current = () => box.videoStream === stream;
+        const showFrame = () => {
+          if (!current() || stream.loading || !stream.pending) return;
+          stream.loading = true;
+          stream.url = URL.createObjectURL(
+            new Blob([stream.pending], { type: "image/jpeg" }),
+          );
+          stream.pending = null;
+          img.src = stream.url;
+        };
+        const reconnect = () => {
+          if (!current() || stream.retry) return;
+          stream.controller.abort();
+          clearInterval(stream.watchdog);
+          stream.pending = null;
+          stream.loading = false;
+          if (stream.url) URL.revokeObjectURL(stream.url);
+          stream.url = null;
+          img.removeAttribute("src");
+          img.hidden = true;
+          placeholder.hidden = false;
+          placeholder.textContent = "Preview unavailable · reconnecting…";
+          note.textContent = "Stream interrupted. Retrying automatically…";
+          const delay = Math.min(
+            15000,
+            3000 * 2 ** Math.min(stream.failures++, 3),
+          );
+          stream.retry = setTimeout(() => {
+            stream.retry = null;
+            if (current()) connect();
+          }, delay);
+        };
         img.onload = () => {
+          if (!current() || stream.retry) return;
+          URL.revokeObjectURL(stream.url);
+          stream.url = null;
+          stream.loading = false;
+          stream.failures = 0;
           img.hidden = false;
           placeholder.hidden = true;
           note.textContent =
@@ -955,17 +1049,60 @@ HTML = r'''
             " · " +
             previewFps +
             " fps requested";
+          showFrame();
         };
-        img.onerror = () => {
-          preview.dataset.failed = "true";
-          stopVideo(box);
+        img.onerror = reconnect;
+        const connect = async () => {
+          const controller = new AbortController();
+          stream.controller = controller;
+          stream.lastFrame = performance.now();
           placeholder.hidden = false;
-          placeholder.textContent = "Preview unavailable";
-          note.textContent =
-            "Preview unavailable. Check camera connection, MJPEG support and permissions, then toggle video off and on to retry.";
+          placeholder.textContent = "Connecting…";
+          note.textContent = "Connecting to live video…";
+          stream.watchdog = setInterval(() => {
+            if (performance.now() - stream.lastFrame > 15000) reconnect();
+          }, 1000);
+          try {
+            const response = await fetch(
+              "/api/stream/" + box.dataset.cameraId,
+              {
+                cache: "no-store",
+                signal: controller.signal,
+              },
+            );
+            if (!response.ok || !response.body)
+              throw Error("Preview unavailable");
+            const kind = response.headers.get("Content-Type") || "";
+            const boundary = /boundary=(?:"([^"\r\n]+)"|([^;\s]+))/i.exec(kind);
+            if (!/^multipart\/x-mixed-replace\s*;/i.test(kind) || !boundary)
+              throw Error("Invalid preview stream");
+            const frames = new MjpegFrames(
+              boundary[1] || boundary[2],
+              (frame) => {
+                if (!current() || controller.signal.aborted) return;
+                stream.lastFrame = performance.now();
+                // Keep only the newest frame while the image decoder is busy.
+                stream.pending = frame;
+                showFrame();
+              },
+            );
+            const reader = response.body.getReader();
+            try {
+              while (current() && !controller.signal.aborted) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                frames.push(value);
+              }
+            } finally {
+              await reader.cancel().catch(() => {});
+              reader.releaseLock();
+            }
+            if (current() && !controller.signal.aborted) reconnect();
+          } catch {
+            if (current() && !controller.signal.aborted) reconnect();
+          }
         };
-        img.src = "/api/stream/" + box.dataset.cameraId;
-        preview.querySelector(".preview-frame").prepend(img);
+        connect();
       }
       function renderCameras(cameras) {
         const grid = $("cameras");
@@ -1004,7 +1141,6 @@ HTML = r'''
             (box.dataset.online === "false" && c.online === true)
           ) {
             stopVideo(box);
-            delete box.querySelector(".preview").dataset.failed;
           }
           box.dataset.online = String(c.online);
           box.dataset.cameraId = c.id;

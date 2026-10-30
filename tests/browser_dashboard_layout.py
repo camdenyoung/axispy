@@ -3,7 +3,6 @@
 Install Playwright in the development environment and use a system Chromium,
 or run `python -m playwright install chromium`. No camera hardware is required.
 """
-import base64
 from pathlib import Path
 import shutil
 import sys
@@ -12,6 +11,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from axispy_ui import HTML
+from browser_preview_support import STREAM_FIXTURE
 
 
 VIEWPORTS = [(width, 900) for width in (
@@ -49,19 +49,14 @@ def main():
             **({'executable_path': executable} if executable else {}),
             headless=True, args=['--no-sandbox'])
         page = browser.new_page()
+        page.add_init_script(STREAM_FIXTURE)
         errors = []
         page.on('pageerror', lambda error: errors.append(str(error)))
-        jpeg = base64.b64decode(page.evaluate("""() => {
-            const c=document.createElement('canvas');c.width=640;c.height=360;
-            const ctx=c.getContext('2d');ctx.fillStyle='#217860';ctx.fillRect(0,0,640,360);
-            return c.toDataURL('image/jpeg').split(',')[1];
-        }"""))
         payload = dict(version='test', selected=0, joystick='Test joystick', armed=True,
                        time='2026-01-01T00:00:00Z', poll_interval_ms=60000,
                        preview_fps=25, preview_resolution='640x360',
                        system=dict(cpu_percent=25, cpu_status='ok',
                                    memory=dict(percent=50, used_bytes=2**30, total_bytes=2**31)))
-        stream_requests = []
 
         def route_request(route):
             path = route.request.url.removeprefix('http://dashboard.test')
@@ -69,9 +64,6 @@ def main():
                 route.fulfill(content_type='text/html', body=HTML)
             elif path == '/api/status':
                 route.fulfill(json=payload)
-            elif path.startswith('/api/stream/'):
-                stream_requests.append(path)
-                route.fulfill(content_type='image/jpeg', body=jpeg)
             elif path.startswith('/api/logs'):
                 route.fulfill(json=dict(cursor=0, entries=[]))
             else:
@@ -98,14 +90,14 @@ def main():
                 if width >= 1440 and height >= 720:
                     assert page.evaluate('document.documentElement.scrollHeight <= innerHeight'), (count, width, height)
                 before = page.locator('#cameras').bounding_box()
-                starts = len(stream_requests)
+                starts = page.evaluate("streamStarts")
                 page.evaluate('window.savedImages=[...document.querySelectorAll(".preview img")]')
                 page.get_by_role('button', name='Show system usage').click()
                 assert page.locator('#resources').is_visible()
                 assert page.locator('#cameras').bounding_box() == before
                 page.evaluate('status()')
                 assert page.evaluate('savedImages.every((img,i)=>img===document.querySelectorAll(".preview img")[i])')
-                assert len(stream_requests) == starts
+                assert page.evaluate("streamStarts") == starts
                 if width > 1280:
                     brand = page.locator('.brand').bounding_box()
                     usage = page.locator('.usage-slot').bounding_box()

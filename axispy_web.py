@@ -412,7 +412,7 @@ class Dashboard:
                         self.send_error(404)
                         return
                     # Bound writes to slow/disconnected viewers as well as camera reads.
-                    self.connection.settimeout(5)
+                    self.connection.settimeout(15)
                     dashboard.stream(index, self)
                     return
                 elif parsed.path == "/api/status":

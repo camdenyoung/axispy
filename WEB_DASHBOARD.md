@@ -95,7 +95,12 @@ defaults to enabled. See the per-camera HTTPS section in README.md. Disconnected
 confirm the outage; previews resume automatically when connectivity recovers.
 A camera without MJPEG support or video
 permission shows a **Preview unavailable** placeholder instead of a broken image; PTZ control and health checks continue.
-Toggle video off and back on to retry a failed stream.
+Failed or stalled previews reconnect automatically with a visible reconnecting message.
+The browser restarts a stream if no complete frame arrives for 15 seconds, and
+retries failures with a 3–15 second backoff. Hiding previews or the browser tab
+cancels both streams and retries. Slow browser writes have a bounded 15-second
+timeout. This helps recover from remote connection interruptions; sustained
+bandwidth limits may still require reducing `AXIS_WEB_PREVIEW_FPS`.
 
 The dashboard relays video through the existing Python server using independent
 connections, so camera credentials stay on the server and the browser needs no
