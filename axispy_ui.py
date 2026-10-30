@@ -679,7 +679,7 @@ HTML = r'''
             <h1>
               axis<span>py</span>PTZ
               <small class="muted" style="font-size: 13px; letter-spacing: 0"
-                >v0.2.11</small
+                >v0.2.12</small
               >
             </h1>
             <p class="eyebrow">Camera control desk</p>
