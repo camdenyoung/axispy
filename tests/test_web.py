@@ -480,8 +480,8 @@ def test_dashboard_with_nonconsecutive_enabled_slots(monkeypatch):
 
 def test_release_version_in_status_and_dashboard(running_dashboard):
     dashboard, _, _ = running_dashboard
-    assert get(dashboard, '/api/status').json()['version'] == '0.2.10'
-    assert 'v0.2.10</small>' in ''.join(get(dashboard, '/').text.split())
+    assert get(dashboard, '/api/status').json()['version'] == '0.2.11'
+    assert 'v0.2.11</small>' in ''.join(get(dashboard, '/').text.split())
 
 
 @pytest.fixture
@@ -650,3 +650,19 @@ def test_invalid_preview_quality(web_config, monkeypatch, value):
     monkeypatch.setenv('AXIS_WEB_PREVIEW_QUALITY', value)
     with pytest.raises(ValueError, match='AXIS_WEB_PREVIEW_QUALITY'):
         Dashboard(web_config, Controller([Mock() for _ in web_config]))
+
+
+@pytest.mark.parametrize('url,verify,protocol,enabled', [
+    ('http://camera.example', True, 'http', None),
+    ('http://camera.example', False, 'http', None),
+    ('https://camera.example', True, 'https', True),
+    ('https://camera.example', False, 'https', False),
+])
+def test_camera_connection_configuration_in_status(web_config, url, verify, protocol, enabled):
+    configs = [dict(web_config[0], url=url, verify_tls=verify)]
+    dashboard = Dashboard(configs, Controller([Mock()]))
+    state = dashboard.snapshot()['cameras'][0]
+    assert state['protocol'] == protocol
+    assert state['tls_verification_enabled'] is enabled
+    assert state['url'] == url
+    assert 'private-example-password' not in json.dumps(state)

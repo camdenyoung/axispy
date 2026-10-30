@@ -1,4 +1,4 @@
-# axispyPTZ v0.2.10 — web dashboard
+# axispyPTZ v0.2.11 — web dashboard
 
 The v0.2 web dashboard is now on **`main`**. The original controller is preserved by the **`v0.1.0`** tag, and the initial dashboard release by **`v0.2.0`**. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md) for deployment and rollback instructions.
 
@@ -60,7 +60,7 @@ axispy --config config.toml
 
 In PowerShell use `$env:AXIS_J1_PASSWORD = '...'`, and likewise for J2–J4. All four passwords are required at startup. Set variables securely on the local host; avoid committing credentials. `config.toml` is ignored by Git.
 
-HTTPS certificates are verified. For a private camera CA, add `ca_bundle = "/absolute/path/to/camera-ca.pem"` to each applicable camera entry. HTTP can be configured explicitly for cameras that require it, but does not encrypt camera traffic. Camera requests deliberately bypass ambient proxy configuration and use a direct network connection.
+HTTPS certificates are verified by default. For a private camera CA, add `ca_bundle = "/absolute/path/to/camera-ca.pem"` to each applicable camera entry. HTTP can be configured explicitly for cameras that require it, but does not encrypt camera traffic. Camera requests deliberately bypass ambient proxy configuration and use a direct network connection.
 
 ## Operation
 
@@ -76,7 +76,7 @@ HTTPS certificates are verified. For a private camera CA, add `ca_bundle = "/abs
 - Camera connection, authentication, or PTZ request failures disarm movement and retry with stop commands every five seconds. Recovery requires a successful stop and then centering before movement; held-stick commands are never replayed. Repeated identical failures log once, with new messages when the failure changes or the camera recovers.
 - Ctrl+C and SIGTERM trigger stop attempts before exit. Invalid configuration still fails at startup so it can be corrected.
 
-Input changes are sent at up to `rate_hz` (10 by default). Unchanged movement commands are coalesced, with watchdog refreshes every 0.5 seconds; idle cameras are not polled continuously. Focus changes and release stops bypass the refresh interval. `autofocus=off` is sent once per manual focus hold instead of on every refresh. Focus/autofocus requests use `focus_timeout` (2 seconds by default) for reading the response; PTZ and connection timeouts retain the `timeout` setting (0.5 seconds by default). A timed-out movement causes one immediate stop attempt; if acknowledged, the controller stays connected but requires centering/releasing before resuming. If stopping also fails, normal outage backoff applies. Each HTTP operation has bounded connect/read timeouts; an unresponsive camera can delay polling and button handling. This is a small synchronous controller, not a hard real-time control system.
+Input changes are sent at up to `rate_hz` (10 by default). Unchanged movement commands are coalesced, with watchdog refreshes every 0.5 seconds; idle cameras receive no repeated movement commands. HTTPS control sessions are kept warm with read-only position queries as described below. Focus changes and release stops bypass the refresh interval. `autofocus=off` is sent once per manual focus hold instead of on every refresh. Focus/autofocus requests use `focus_timeout` (2 seconds by default) for reading the response; PTZ and connection timeouts retain the `timeout` setting (0.5 seconds by default). A timed-out movement causes one immediate stop attempt; if acknowledged, the controller stays connected but requires centering/releasing before resuming. If stopping also fails, normal outage backoff applies. Each HTTP operation has bounded connect/read timeouts; an unresponsive camera can delay polling and button handling. This is a small synchronous controller, not a hard real-time control system.
 
 Commands include `continuouspantiltmove`, `continuouszoommove`, `continuousfocusmove` (when focusing), and `continuoustimeout` (default 2 seconds). Confirm support and timeout behavior for your camera model/firmware in the [Axis VAPIX PTZ documentation](https://developer.axis.com/vapix/network-video/pantiltzoom-api/). A successful HTTP response does not prove the camera enforces a watchdog. With low maximum speeds, test neutral stop, camera switching, unplugging the joystick, and loss of network connectivity before operational use. If a camera ignores the timeout, motion may continue after a process crash or network outage; a client cannot deliver a stop over a broken connection. Keep independent camera controls available.
 
@@ -121,3 +121,65 @@ MJPEG previews for enabled cameras. Video is off by default; no `.env` changes
 are required. Cameras must support MJPEG and the configured account must have
 video-viewing permission. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md#optional-live-camera-video)
 for compatibility, bandwidth, and access details.
+
+## Per-camera HTTPS certificate verification
+
+For a camera using a self-signed or otherwise untrusted certificate, you can
+explicitly disable certificate verification for that camera in `.env`:
+
+```dotenv
+AXIS_J1_URL=https://192.168.1.101
+AXIS_J1_VERIFY_TLS=false
+```
+
+Use `AXIS_J2_VERIFY_TLS`, `AXIS_J3_VERIFY_TLS`, and `AXIS_J4_VERIFY_TLS` for the other
+slots. Values accept `true`/`false` or `1`/`0`, ignoring case and surrounding spaces.
+Unset or blank inherits the camera's TOML `verify_tls` setting, defaulting to
+`true`. In TOML, `verify_tls = false` belongs in the applicable `[[cameras]]` entry;
+an explicit environment value takes precedence. Disabled camera slots ignore
+this setting.
+
+This applies to all that camera's PTZ/focus requests, dashboard health checks,
+and live video. `false` overrides its CA bundle, so no certificate file is needed.
+`true` uses the configured CA bundle or normal system trust. Verification remains
+enabled for other cameras. No change to the URL scheme is made automatically.
+
+HTTPS still encrypts traffic when verification is off, but the camera's identity
+is no longer checked. Use this only on trusted networks; a trusted private CA
+bundle remains the preferred way to use self-signed/private camera certificates.
+
+After editing `.env`, run `docker compose up -d` or restart source/native mode.
+After updating code, rebuild with `docker compose up -d --build`.
+
+## HTTPS control-session warming
+
+HTTPS cameras keep a dedicated control session warm by default. When idle, the
+session sends a read-only position query every second, so the next camera switch
+can reuse its TCP/TLS connection and Digest authentication state. Each camera's
+own worker serializes these queries with control requests. Connection warming
+never sends stop, movement, focus or autofocus commands, and does not alter
+selected-camera state, stop acknowledgements or neutral rearming.
+
+```dotenv
+AXIS_CONTROL_KEEPALIVE_SECONDS=1
+```
+
+Accepts `0` to disable or `0.5`–`30` seconds; unset defaults to `1`. In TOML this
+is `control_keepalive_seconds` in `[control]`. HTTP cameras retain the existing
+control path. Use an interval shorter than the camera's keep-alive idle timeout.
+The configured certificate policy and connect/read limits still apply; keep
+`AXIS_TIMEOUT=2` if your cameras need that time for cold HTTPS connections.
+
+Warm-up failures are logged without disabling ordinary control requests, and
+background retries back off to at least five seconds. Other cameras' workers
+continue independently. A control request waits for its acknowledgement; there
+are no abandoned requests that can later replay movement. Shutdown closes the
+workers and discards commands that have not started. A read-only query already
+in progress must finish within the normal request behavior before a queued
+control request can run, so a cold/recovering camera can still incur a delay.
+Startup connection/authentication setup is not eliminated.
+
+This adds up to one idle query per second per HTTPS camera, separate from web
+health checks and video. Dashboard/video sessions remain separate. Explicit
+unverified-HTTPS warnings are shown once per host rather than for every idle
+query; certificate verification remains enabled unless disabled per camera.

@@ -25,7 +25,7 @@ To roll back, run `docker compose down` in `axispy-v2`, then `docker compose up 
 
 ## What the page shows
 
-- Four camera cards: configured name, URL, VAPIX channel and current availability.
+- Four camera cards: configured name, linked URL, connection protocol and current availability.
 - The camera actually selected by the controller, including when a requested switch is blocked because a stop is unconfirmed.
 - Joystick presence and whether movement is armed or inhibited.
 - A PTZ indicator always visible on every card, keeping the layout consistent when selection changes: **Active** after an accepted nonzero pan, tilt or zoom command, **Idle** after a successful stop, and **Unconfirmed** before the first command or after a control failure. This reports axispy commands, not measured camera movement. Manual focus and health checks do not count as PTZ activity. The indicator uses the configured dashboard refresh (one second by default), so very brief movements may occur between updates.
@@ -89,7 +89,9 @@ Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requestin
 640×360 (16:9) at 25 fps by default with compression 50. The camera must support MJPEG at this
 resolution and the configured account must have permission to view video.
 The configured camera channel, username/password, HTTPS verification and optional
-camera CA bundle also apply to video. Disconnected cameras show a **Camera Offline** placeholder once health checks
+camera CA bundle also apply to video. `AXIS_Jn_VERIFY_TLS=false` disables
+certificate verification for that camera’s control, probes and preview; it
+defaults to enabled. See the per-camera HTTPS section in README.md. Disconnected cameras show a **Camera Offline** placeholder once health checks
 confirm the outage; previews resume automatically when connectivity recovers.
 A camera without MJPEG support or video
 permission shows a **Preview unavailable** placeholder instead of a broken image; PTZ control and health checks continue.
@@ -224,3 +226,17 @@ Optional browser preference checks (requires Playwright and Chromium):
 ```sh
 python tests/browser_dashboard_preferences.py
 ```
+
+## Camera connection badges
+
+Each camera card shows its configured **HTTP** or **HTTPS** protocol beside its
+availability. **HTTPS · unverified** means certificate verification has been
+explicitly disabled for that camera. Hover over the badge for the verification
+setting. The badge describes configuration; Online/Offline separately reports
+camera reachability. HTTPS with verification enabled is not a claim that the
+camera is currently connected or that its certificate has passed validation.
+
+The camera address links to that camera's own web interface in a new tab using
+its configured HTTP/HTTPS URL, without adding credentials. The browser needs
+direct network access to the camera and handles its own login/certificate trust;
+the application's `VERIFY_TLS=false` setting does not bypass browser warnings.

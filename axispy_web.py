@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, quote_plus, urlsplit
 import requests
 from requests.auth import HTTPDigestAuth
 
+from axispy import camera_tls_verify
 from axispy_ui import HTML
 
 
@@ -177,6 +178,8 @@ class Dashboard:
         self.probe_errors = [None] * len(configs)
         self.probe_log_at = [0.] * len(configs)
         self.states = [dict(id=i, slot=c.get("slot", i + 1), name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
+                            protocol=urlsplit(c["url"]).scheme,
+                            tls_verification_enabled=(camera_tls_verify(c) is not False) if urlsplit(c["url"]).scheme == "https" else None,
                             checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None,
                             ptz_activity="unknown")
                        for i, c in enumerate(configs)]
@@ -214,7 +217,7 @@ class Dashboard:
     def snapshot(self):
         usage = self.host_usage.snapshot()
         with self.guard:
-            return dict(system=usage, version="0.2.10", time=timestamp(), selected=self.controller.selected,
+            return dict(system=usage, version="0.2.11", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms, preview_fps=self.preview_fps,
                         preview_quality=self.preview_quality, preview_resolution=self.preview_resolution,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
@@ -296,7 +299,7 @@ class Dashboard:
             with requests.Session() as session:
                 session.auth = auth
                 session.trust_env = False
-                session.verify = config.get("ca_bundle", True)
+                session.verify = camera_tls_verify(config)
                 self.probe(index, session)
             self.finished.wait(self.interval)
 
@@ -307,7 +310,7 @@ class Dashboard:
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                session.verify = config.get("ca_bundle", True)
+                session.verify = camera_tls_verify(config)
                 session.auth = HTTPDigestAuth(config["username"], os.environ[config["password_env"]])
                 with session.get(config["url"].rstrip("/") + "/axis-cgi/mjpg/video.cgi",
                                  params={"camera": config.get("channel", 1), "resolution": self.preview_resolution,
