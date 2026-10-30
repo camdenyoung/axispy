@@ -1234,3 +1234,64 @@ def test_disabled_buttons_ignored_in_controller_loop(camera_environment, monkeyp
     for camera in cameras:
         camera.enable_autofocus.assert_not_called()
         camera.close.assert_called_once()
+
+
+
+@pytest.mark.parametrize('digest_retry', [False, True])
+def test_slow_control_diagnostics_are_rate_limited_and_do_not_expose_credentials(monkeypatch, caplog, digest_retry):
+    import axispy
+    from datetime import timedelta
+    clock = [0.]
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'private-test-password')
+    camera = Camera(dict(name='J2', url='https://camera.example', username='operator',
+                         password_env='TEST_CAMERA_PASSWORD'), 2, 2)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    response = requests.Response()
+    response.status_code = 200
+    response._content = b''
+    response.headers['Content-Length'] = '0'
+    response.elapsed = timedelta(seconds=.01)
+    if digest_retry:
+        challenge = requests.Response()
+        challenge.status_code = 401
+        response.history = [challenge]
+    def get(*args, **kwargs):
+        clock[0] += .4
+        return response
+    monkeypatch.setattr(camera.session, 'get', get)
+    try:
+        with caplog.at_level('WARNING', logger='axispy'):
+            camera.move(STOP)
+            camera.move(STOP)
+            assert caplog.text.count('slow control stop: acknowledged') == 1
+            clock[0] += 31
+            camera.move(STOP)
+        assert caplog.text.count('slow control stop: acknowledged') == 2
+        assert ('final response headers unavailable (Digest retry)' if digest_retry else 'final response headers 0.01s') in caplog.text
+        assert 'body framing Content-Length' in caplog.text
+        assert 'private-test-password' not in caplog.text
+        assert 'camera.example' not in caplog.text
+    finally:
+        camera.close()
+
+
+def test_slow_control_failure_preserves_timeout_and_logs_without_raw_exception(monkeypatch, caplog):
+    import axispy
+    clock = [0.]
+    monkeypatch.setenv('TEST_CAMERA_PASSWORD', 'private-test-password')
+    camera = Camera(dict(name='J3', url='https://camera.example', username='operator',
+                         password_env='TEST_CAMERA_PASSWORD'), 2, 2)
+    monkeypatch.setattr(axispy.time, 'monotonic', lambda: clock[0])
+    def get(*args, **kwargs):
+        clock[0] += 2
+        raise requests.ReadTimeout('private-test-password https://camera.example')
+    monkeypatch.setattr(camera.session, 'get', get)
+    try:
+        with caplog.at_level('WARNING', logger='axispy'), pytest.raises(requests.ReadTimeout):
+            camera.move(STOP)
+        assert 'J3 slow control stop: failed after 2.00s' in caplog.text
+        assert 'final response headers unavailable' in caplog.text
+        assert 'private-test-password' not in caplog.text
+        assert 'camera.example' not in caplog.text
+    finally:
+        camera.close()

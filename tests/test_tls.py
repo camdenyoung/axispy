@@ -7,6 +7,7 @@ import shutil
 import ssl
 import subprocess
 import threading
+import time
 from unittest.mock import Mock
 from urllib.parse import parse_qs, urlsplit
 
@@ -96,9 +97,13 @@ def https_camera(tmp_path, monkeypatch):
             body = frame if stream else b'pan=0\ntilt=0\nzoom=1\nautofocus=on' if params.get('query') == ['position'] else b''
             self.send_response(200)
             self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame' if stream else 'text/plain')
-            self.send_header('Content-Length', str(len(body)))
+            if not config.get('_test_close_delay'):
+                self.send_header('Content-Length', str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
+            if config.get('_test_close_delay'):
+                time.sleep(config['_test_close_delay'])
         def log_message(self, *_):
             pass
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -167,5 +172,21 @@ def test_https_control_health_and_video_share_verification(https_camera, monkeyp
         paths = [urlsplit(path).path for path in received]
         assert paths == ['/axis-cgi/com/ptz.cgi', '/axis-cgi/com/ptz.cgi', '/axis-cgi/mjpg/video.cgi']
         assert camera.session.verify == (cert if verify else False)
+    finally:
+        camera.close()
+
+
+
+def test_slow_https_body_reports_fast_headers_and_close_framing(https_camera, caplog):
+    config, _, _, _ = https_camera
+    config.update(verify_tls=False, _test_close_delay=.4)
+    camera = Camera(config, 2, 2)
+    try:
+        with pytest.warns(InsecureRequestWarning), caplog.at_level('WARNING', logger='axispy'):
+            camera.move(STOP)
+        assert 'slow control stop: acknowledged' in caplog.text
+        assert 'body framing connection-close' in caplog.text
+        assert 'connect/read limits 2.00/2.00s' in caplog.text
+        assert camera.last_ptz == (0, 0, 0)
     finally:
         camera.close()

@@ -210,6 +210,7 @@ class Camera:
         self.ptz_sent_at = self.focus_sent_at = 0.
         self.refresh_interval = min(.5, watchdog / 2)
         self.clock = time.monotonic
+        self.slow_request_logged_at = {}
         self.session = requests.Session()
         self.session.auth = HTTPDigestAuth(config["username"], password)
         # Do not route local camera credentials through ambient HTTP proxies.
@@ -265,28 +266,71 @@ class Camera:
             self.dashboard.command_result(self.dashboard_index, True, "auto")
 
     def _request(self, params, read_timeout=None):
-        response = self.session.get(self.url, params=params,
-                                    timeout=(self.timeout, read_timeout or self.timeout), allow_redirects=False)
-        response.raise_for_status()
-        if 300 <= response.status_code < 400:
-            target = urlsplit(response.headers.get("Location", ""))
-            if target.scheme == "https" and self.url.startswith("http://"):
-                raise CameraCommandError(f"HTTP {response.status_code} redirect to HTTPS; enable HTTP on the camera or configure trusted HTTPS")
-            raise CameraCommandError(f"HTTP {response.status_code} redirect; check camera URL and HTTP/HTTPS settings")
-        # Axis firmware may acknowledge PTZ commands with 204 No Content.
-        if response.status_code == 204:
-            return
-        if response.status_code != 200:
-            raise CameraCommandError(f"Unexpected HTTP {response.status_code} from PTZ endpoint")
-        body = response.text.strip()
-        if body.lower().startswith("error"):
-            # Redact before truncating/normalizing; never report raw request URLs.
-            detail = body.replace(self.session.auth.password, "[redacted]")
-            detail = " ".join(detail.split())
-            detail = "".join(char for char in detail if char.isprintable())[:240]
-            raise CameraCommandError(f"PTZ command rejected: {detail}")
-        if body.lower().startswith(("<!doctype html", "<html")):
-            raise CameraCommandError("PTZ endpoint returned an HTML page; check camera URL, authentication and PTZ support")
+        started = time.monotonic()
+        read_limit = read_timeout or self.timeout
+        response = None
+        outcome = "failed"
+        try:
+            response = self.session.get(self.url, params=params,
+                                        timeout=(self.timeout, read_limit), allow_redirects=False)
+            response.raise_for_status()
+            if 300 <= response.status_code < 400:
+                target = urlsplit(response.headers.get("Location", ""))
+                if target.scheme == "https" and self.url.startswith("http://"):
+                    raise CameraCommandError(f"HTTP {response.status_code} redirect to HTTPS; enable HTTP on the camera or configure trusted HTTPS")
+                raise CameraCommandError(f"HTTP {response.status_code} redirect; check camera URL and HTTP/HTTPS settings")
+            # Axis firmware may acknowledge PTZ commands with 204 No Content.
+            if response.status_code == 204:
+                outcome = "acknowledged"
+                return
+            if response.status_code != 200:
+                raise CameraCommandError(f"Unexpected HTTP {response.status_code} from PTZ endpoint")
+            body = response.text.strip()
+            if body.lower().startswith("error"):
+                # Redact before truncating/normalizing; never report raw request URLs.
+                detail = body.replace(self.session.auth.password, "[redacted]")
+                detail = " ".join(detail.split())
+                detail = "".join(char for char in detail if char.isprintable())[:240]
+                raise CameraCommandError(f"PTZ command rejected: {detail}")
+            if body.lower().startswith(("<!doctype html", "<html")):
+                raise CameraCommandError("PTZ endpoint returned an HTML page; check camera URL, authentication and PTZ support")
+            outcome = "acknowledged"
+        finally:
+            finished = time.monotonic()
+            elapsed = finished - started
+            if params.get("autofocus") == "on":
+                operation = "autofocus"
+            elif all(params.get(key, zero) == zero for key, zero in (
+                    ("continuouspantiltmove", "0,0"), ("continuouszoommove", "0"),
+                    ("continuousfocusmove", "0"))):
+                operation = "stop"
+            else:
+                operation = "movement"
+            key = (operation, outcome)
+            # Rate-limit repeated slow requests while a stick remains held.
+            if elapsed >= .25 and finished - self.slow_request_logged_at.get(key, float("-inf")) >= 30:
+                self.slow_request_logged_at[key] = finished
+                headers = "unavailable"
+                framing = "unavailable"
+                if response is not None:
+                    # Requests does not populate final-response elapsed timing
+                    # when Digest authentication resends through the adapter.
+                    digest_retry = any(item.status_code == 401 for item in response.history)
+                    if digest_retry:
+                        headers = "unavailable (Digest retry)"
+                    else:
+                        duration = response.elapsed.total_seconds()
+                        if isinstance(duration, (int, float)):
+                            headers = f"{duration:.2f}s"
+                    if "Content-Length" in response.headers:
+                        framing = "Content-Length"
+                    elif "chunked" in response.headers.get("Transfer-Encoding", "").lower():
+                        framing = "chunked"
+                    else:
+                        framing = "connection-close"
+                LOG.warning("%s slow control %s: %s after %.2fs (final response headers %s; body framing %s; connect/read limits %.2f/%.2fs)",
+                            self.name, operation, outcome, elapsed, headers, framing, self.timeout, read_limit)
+
 
     def close(self):
         self.session.close()

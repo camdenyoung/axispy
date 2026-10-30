@@ -148,3 +148,21 @@ Apply `.env` changes with `docker compose up -d`; rebuild after updating code.
 HTTPS remains encrypted but the camera identity is not verified. See
 [README.md](README.md#per-camera-https-certificate-verification) for defaults,
 TOML precedence, and the trusted-CA alternative.
+
+## Diagnosing slow camera selection or control
+
+A control request taking at least 0.25 seconds logs its camera, operation
+(stop/movement/autofocus), result and total elapsed time. The same slow operation
+and result is logged at most once every 30 seconds per camera. The diagnostic
+also includes final-response header timing, response-body framing, and configured
+connect/read limits, without raw exception messages, camera URLs or passwords.
+Find these messages in **Debug logs** or `docker compose logs`.
+
+A fast header response with a much slower total and `body framing connection-close`
+can indicate waiting for the camera to finish/close its response. A slow header
+response instead includes connection, authentication or camera processing time.
+The header timing is for the final response. When Requests retries a Digest
+challenge, it does not provide this timing; the diagnostic marks it unavailable
+instead of reporting a misleading zero. Authentication round trips are still
+included in the total. These measurements help distinguish the causes;
+they do not change timeouts, connection handling, stop confirmation or rearming.
