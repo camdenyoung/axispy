@@ -91,6 +91,12 @@ def https_camera(tmp_path, monkeypatch):
     frame = b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 2048\r\n\r\n' + b'x' * 2048 + b'\r\n--frame--\r\n'
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if config.get('_test_digest') and not self.headers.get('Authorization', '').startswith('Digest '):
+                self.send_response(401)
+                self.send_header('WWW-Authenticate', 'Digest realm="camera", nonce="test-timing", qop="auth"')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+                return
             received.append(self.path)
             params = parse_qs(urlsplit(self.path).query)
             stream = urlsplit(self.path).path == '/axis-cgi/mjpg/video.cgi'
@@ -190,3 +196,42 @@ def test_slow_https_body_reports_fast_headers_and_close_framing(https_camera, ca
         assert camera.last_ptz == (0, 0, 0)
     finally:
         camera.close()
+
+
+
+@pytest.mark.parametrize('verify', [True, False])
+def test_read_only_diagnostic_uses_control_tls_and_digest_settings(https_camera, camera_env, monkeypatch, capsys, verify):
+    from axispy import diagnose_camera
+    config, cert, received, _ = https_camera
+    config['_test_digest'] = True
+    monkeypatch.setenv('AXIS_J3_URL', config['url'])
+    monkeypatch.setenv('AXIS_J3_CA_BUNDLE', cert if verify else '/missing/ca.pem')
+    monkeypatch.setenv('AXIS_J3_VERIFY_TLS', str(verify).lower())
+    with (nullcontext() if verify else pytest.warns(InsecureRequestWarning)):
+        assert diagnose_camera(Settings.load(), 'J3')
+    assert len(received) == 3
+    assert all(parse_qs(urlsplit(path).query) == {'camera': ['1'], 'query': ['position']} for path in received)
+    output = capsys.readouterr().out
+    assert output.count('J3 sample') == 3
+    assert 'digest_challenges=1' in output
+    assert 'digest_challenges=0' in output
+    assert 'HTTP=200' in output
+    assert ('TLS verification enabled' if verify else 'TLS verification disabled') in output
+    assert 'test-only' not in output
+    assert config['url'] not in output
+
+
+def test_read_only_diagnostic_separates_headers_and_body(https_camera, camera_env, monkeypatch, capsys):
+    import re
+    from axispy import diagnose_camera
+    config, _, _, _ = https_camera
+    config.update(_test_close_delay=.4)
+    monkeypatch.setenv('AXIS_J3_URL', config['url'])
+    monkeypatch.setenv('AXIS_J3_VERIFY_TLS', 'false')
+    with pytest.warns(InsecureRequestWarning):
+        assert diagnose_camera(Settings.load(), 'J3')
+    output = capsys.readouterr().out
+    samples = re.findall(r'headers=([0-9.]+)s body=([0-9.]+)s total=([0-9.]+)s', output)
+    assert len(samples) == 3
+    assert all(float(body) >= .3 and float(total) >= float(body) for _, body, total in samples)
+    assert 'framing=connection-close' in output

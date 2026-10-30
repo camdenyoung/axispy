@@ -681,6 +681,48 @@ def run(args):
             signal.signal(sig, handler)
 
 
+def diagnose_camera(settings, slot):
+    """Time read-only requests through the same client used for camera control."""
+    slot_number = int(slot[1:])
+    config = next((camera for camera in settings.cameras if camera["slot"] == slot_number), None)
+    if config is None:
+        raise ValueError(f"{slot} is disabled")
+    camera = Camera(config, settings.timeout, settings.continuous_timeout, settings.focus_timeout)
+    protocol = urlsplit(config["url"]).scheme.upper()
+    verification = "disabled" if camera.session.verify is False else "enabled"
+    print(f"{slot} read-only position check: {protocol}; TLS verification {verification}; connect/read limits {settings.timeout:.2f}/{settings.timeout:.2f}s", flush=True)
+    try:
+        for sample in range(1, 4):
+            started = time.monotonic()
+            try:
+                # stream=True separates time to final response headers (including
+                # Digest retries) from reading the response body. No PTZ commands.
+                with camera.session.get(camera.url, params={"camera": camera.channel, "query": "position"},
+                                        timeout=(settings.timeout, settings.timeout),
+                                        allow_redirects=False, stream=True) as response:
+                    headers_at = time.monotonic()
+                    response.raise_for_status()
+                    body = response.text.strip()
+                    finished = time.monotonic()
+                    values = dict(line.split("=", 1) for line in body.splitlines() if "=" in line)
+                    if response.status_code != 200 or body.lower().startswith(("error", "<")) or not any(
+                            key in values for key in ("pan", "tilt", "zoom", "focus", "autofocus")):
+                        raise ValueError("Camera did not return VAPIX position status")
+                    framing = "Content-Length" if "Content-Length" in response.headers else (
+                        "chunked" if "chunked" in response.headers.get("Transfer-Encoding", "").lower() else "connection-close")
+                    challenges = sum(item.status_code == 401 for item in response.history)
+                    version = {10: "1.0", 11: "1.1", 20: "2"}.get(response.raw.version, "unknown")
+                    print(f"{slot} sample {sample}: headers={headers_at-started:.3f}s body={finished-headers_at:.3f}s total={finished-started:.3f}s HTTP={response.status_code} version={version} digest_challenges={challenges} framing={framing}", flush=True)
+            except requests.RequestException as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                reason = f"HTTP {status}" if status else type(exc).__name__
+                print(f"{slot} sample {sample}: failed ({reason}) after {time.monotonic()-started:.3f}s", flush=True)
+                return False
+    finally:
+        camera.close()
+    return True
+
+
 def configure_file_logging():
     """Optionally mirror application logs to a bounded, persistent UTF-8 file."""
     path = os.environ.get("AXIS_LOG_FILE", "").strip()
@@ -706,6 +748,7 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--list", action="store_true", help="List USB/SDL joysticks without connecting to cameras")
     mode.add_argument("--inspect", action="store_true", help="Print axes and buttons to calibrate mappings; no camera traffic")
+    mode.add_argument("--diagnose-camera", type=str.upper, choices=("J1", "J2", "J3", "J4"), help="Read-only position timing check using the control client; no joystick or movement")
     parser.add_argument("--device", type=int, default=0, help="Device index for --inspect")
     parser.add_argument("--config", help="Optional TOML configuration; environment variables override it")
     args = parser.parse_args()
@@ -715,12 +758,15 @@ def main():
         base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
         # Existing service/process environment always takes precedence over .env.
         load_dotenv(os.environ.get("AXISPY_ENV_FILE", str(base / ".env")), override=False)
-        file_handler = configure_file_logging()
-        LOG.info("axispy starting")
+        if not args.diagnose_camera:
+            file_handler = configure_file_logging()
+            LOG.info("axispy starting")
         if args.config is None:
             args.config = os.environ.get("AXISPY_CONFIG")
             if args.config is None and (base / "config.toml").is_file():
                 args.config = str(base / "config.toml")
+        if args.diagnose_camera:
+            return 0 if diagnose_camera(Settings.load(args.config), args.diagnose_camera) else 1
         run(args)
     except (OSError, ValueError, KeyError, TypeError, RuntimeError, requests.RequestException) as exc:
         # Avoid logging requests exception URLs, which may contain network details.

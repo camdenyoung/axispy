@@ -166,3 +166,26 @@ challenge, it does not provide this timing; the diagnostic marks it unavailable
 instead of reporting a misleading zero. Authentication round trips are still
 included in the total. These measurements help distinguish the causes;
 they do not change timeouts, connection handling, stop confirmation or rearming.
+
+### Read-only timing comparison with the controller client
+
+To compare curl with the application's own Python/Requests client, run:
+
+```sh
+docker compose exec axispy axispy --diagnose-camera J3
+```
+
+The check uses the running container's injected environment and the same camera
+configuration, credentials, TLS policy, channel, timeouts and Session/Digest
+implementation as the control client. It makes three consecutive read-only
+`query=position` requests in one diagnostic session. It does not send stop,
+movement, focus or autofocus commands, initialize SDL, or open the service's
+rotating log file. The running controller does not need to be stopped.
+
+Each sample prints time to final headers (including Digest challenge exchanges),
+body-read time, total time, status code, HTTP response version, authentication
+challenge count and body framing. It does not print URLs, usernames, passwords,
+or response contents. The first and repeat samples help distinguish initial
+connection/authentication costs from repeat-request delays. A diagnostic session
+is separate from the active controller; it does not keep the active connection
+warm. A failed query returns a nonzero exit status with a sanitized reason.

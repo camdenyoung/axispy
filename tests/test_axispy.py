@@ -1295,3 +1295,44 @@ def test_slow_control_failure_preserves_timeout_and_logs_without_raw_exception(m
         assert 'camera.example' not in caplog.text
     finally:
         camera.close()
+
+
+
+def test_diagnostic_mode_does_not_start_controller_or_file_logging(camera_environment, monkeypatch, tmp_path):
+    import axispy
+    import sys
+    monkeypatch.setenv('AXISPY_ENV_FILE', str(tmp_path / 'missing.env'))
+    monkeypatch.setenv('AXIS_LOG_FILE', str(tmp_path / 'service.log'))
+    diagnostic = Mock(return_value=True)
+    run = Mock(side_effect=AssertionError('Controller must not run'))
+    configure_logging = Mock(side_effect=AssertionError('Service log must not be opened'))
+    monkeypatch.setattr(axispy, 'diagnose_camera', diagnostic)
+    monkeypatch.setattr(axispy, 'run', run)
+    monkeypatch.setattr(axispy, 'configure_file_logging', configure_logging)
+    monkeypatch.setattr(sys, 'argv', ['axispy', '--diagnose-camera', 'j3'])
+    assert axispy.main() == 0
+    assert diagnostic.call_args.args[1] == 'J3'
+    run.assert_not_called()
+    configure_logging.assert_not_called()
+    assert not (tmp_path / 'service.log').exists()
+
+
+def test_diagnostic_request_failure_is_sanitized_and_session_closed(camera_environment, monkeypatch, capsys):
+    import axispy
+    client = Mock()
+    client.session.verify = False
+    client.session.get.side_effect = requests.ReadTimeout('secret-password https://private-camera.example')
+    monkeypatch.setattr(axispy, 'Camera', Mock(return_value=client))
+    assert not axispy.diagnose_camera(Settings.load(), 'J2')
+    output = capsys.readouterr().out
+    assert 'failed (ReadTimeout)' in output
+    assert 'secret-password' not in output
+    assert 'private-camera.example' not in output
+    client.close.assert_called_once()
+
+
+def test_diagnostic_rejects_disabled_camera(camera_environment, monkeypatch):
+    from axispy import diagnose_camera
+    monkeypatch.setenv('AXIS_J2_ENABLED', 'false')
+    with pytest.raises(ValueError, match='J2 is disabled'):
+        diagnose_camera(Settings.load(), 'J2')
