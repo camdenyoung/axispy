@@ -89,7 +89,9 @@ Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requestin
 640×360 (16:9) at 25 fps by default with compression 50. The camera must support MJPEG at this
 resolution and the configured account must have permission to view video.
 The configured camera channel, username/password, HTTPS verification and optional
-camera CA bundle also apply to video. Disconnected cameras show a **Camera Offline** placeholder once health checks
+camera CA bundle also apply to video. `AXIS_Jn_VERIFY_TLS=false` disables
+certificate verification for that camera’s control, probes and preview; it
+defaults to enabled. See the per-camera HTTPS section in README.md. Disconnected cameras show a **Camera Offline** placeholder once health checks
 confirm the outage; previews resume automatically when connectivity recovers.
 A camera without MJPEG support or video
 permission shows a **Preview unavailable** placeholder instead of a broken image; PTZ control and health checks continue.

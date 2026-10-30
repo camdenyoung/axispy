@@ -89,6 +89,11 @@ class Settings:
             camera["slot"] = i
             if not enabled:
                 continue
+            raw = os.environ.get(f"AXIS_J{i}_VERIFY_TLS", "").strip().lower()
+            if raw:
+                if raw not in ("true", "false", "1", "0"):
+                    raise ValueError(f"AXIS_J{i}_VERIFY_TLS must be true or false")
+                camera["verify_tls"] = raw in ("true", "1")
             for key in ("url", "username", "channel", "ca_bundle"):
                 raw = os.environ.get(f"AXIS_J{i}_{key.upper()}")
                 if raw is not None:
@@ -139,6 +144,7 @@ class Settings:
         for camera in cameras:
             if not camera["enabled"]:
                 continue
+            camera_tls_verify(camera)
             for axis in ("pan", "tilt", "zoom"):
                 key = f"max_{axis}"
                 if key in camera and (type(camera[key]) is not int or not 0 <= camera[key] <= 100):
@@ -164,6 +170,21 @@ class Settings:
             if key in self.cameras[index]:
                 config[key] = self.cameras[index][key]
         return config
+
+
+def camera_tls_verify(config):
+    """Requests verification setting shared by control, status and video clients."""
+    verify = config.get("verify_tls", True)
+    if type(verify) is not bool:
+        raise ValueError("Camera verify_tls must be true or false")
+    if not verify:
+        return False
+    bundle = config.get("ca_bundle", True)
+    if bundle == "":
+        return True
+    if not isinstance(bundle, (str, bool)) or bundle is False:
+        raise ValueError("Use a trusted ca_bundle or explicitly set verify_tls = false")
+    return bundle
 
 
 class CameraCommandError(RuntimeError):
@@ -193,9 +214,7 @@ class Camera:
         self.session.auth = HTTPDigestAuth(config["username"], password)
         # Do not route local camera credentials through ambient HTTP proxies.
         self.session.trust_env = False
-        self.session.verify = config.get("ca_bundle", True)
-        if not isinstance(self.session.verify, (str, bool)) or self.session.verify is False:
-            raise ValueError("Use a trusted ca_bundle; TLS verification cannot be disabled")
+        self.session.verify = camera_tls_verify(config)
 
     def move(self, motion: tuple[int, int, int, int]):
         pan, tilt, zoom, focus = motion

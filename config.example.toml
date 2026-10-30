@@ -33,6 +33,7 @@ autofocus_hold_seconds = 5.0
 continuous_timeout = 2
 
 [[cameras]]
+# verify_tls = false  # Optional: skip this camera’s HTTPS certificate verification.
 name = "J1"
 url = "https://192.168.1.101"
 username = "operator"

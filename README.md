@@ -60,7 +60,7 @@ axispy --config config.toml
 
 In PowerShell use `$env:AXIS_J1_PASSWORD = '...'`, and likewise for J2–J4. All four passwords are required at startup. Set variables securely on the local host; avoid committing credentials. `config.toml` is ignored by Git.
 
-HTTPS certificates are verified. For a private camera CA, add `ca_bundle = "/absolute/path/to/camera-ca.pem"` to each applicable camera entry. HTTP can be configured explicitly for cameras that require it, but does not encrypt camera traffic. Camera requests deliberately bypass ambient proxy configuration and use a direct network connection.
+HTTPS certificates are verified by default. For a private camera CA, add `ca_bundle = "/absolute/path/to/camera-ca.pem"` to each applicable camera entry. HTTP can be configured explicitly for cameras that require it, but does not encrypt camera traffic. Camera requests deliberately bypass ambient proxy configuration and use a direct network connection.
 
 ## Operation
 
@@ -121,3 +121,32 @@ MJPEG previews for enabled cameras. Video is off by default; no `.env` changes
 are required. Cameras must support MJPEG and the configured account must have
 video-viewing permission. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md#optional-live-camera-video)
 for compatibility, bandwidth, and access details.
+
+## Per-camera HTTPS certificate verification
+
+For a camera using a self-signed or otherwise untrusted certificate, you can
+explicitly disable certificate verification for that camera in `.env`:
+
+```dotenv
+AXIS_J1_URL=https://192.168.1.101
+AXIS_J1_VERIFY_TLS=false
+```
+
+Use `AXIS_J2_VERIFY_TLS`, `AXIS_J3_VERIFY_TLS`, and `AXIS_J4_VERIFY_TLS` for the other
+slots. Values accept `true`/`false` or `1`/`0`, ignoring case and surrounding spaces.
+Unset or blank inherits the camera's TOML `verify_tls` setting, defaulting to
+`true`. In TOML, `verify_tls = false` belongs in the applicable `[[cameras]]` entry;
+an explicit environment value takes precedence. Disabled camera slots ignore
+this setting.
+
+This applies to all that camera's PTZ/focus requests, dashboard health checks,
+and live video. `false` overrides its CA bundle, so no certificate file is needed.
+`true` uses the configured CA bundle or normal system trust. Verification remains
+enabled for other cameras. No change to the URL scheme is made automatically.
+
+HTTPS still encrypts traffic when verification is off, but the camera's identity
+is no longer checked. Use this only on trusted networks; a trusted private CA
+bundle remains the preferred way to use self-signed/private camera certificates.
+
+After editing `.env`, run `docker compose up -d` or restart source/native mode.
+After updating code, rebuild with `docker compose up -d --build`.

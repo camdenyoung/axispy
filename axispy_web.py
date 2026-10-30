@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote, quote_plus, urlsplit
 import requests
 from requests.auth import HTTPDigestAuth
 
+from axispy import camera_tls_verify
 from axispy_ui import HTML
 
 
@@ -296,7 +297,7 @@ class Dashboard:
             with requests.Session() as session:
                 session.auth = auth
                 session.trust_env = False
-                session.verify = config.get("ca_bundle", True)
+                session.verify = camera_tls_verify(config)
                 self.probe(index, session)
             self.finished.wait(self.interval)
 
@@ -307,7 +308,7 @@ class Dashboard:
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                session.verify = config.get("ca_bundle", True)
+                session.verify = camera_tls_verify(config)
                 session.auth = HTTPDigestAuth(config["username"], os.environ[config["password_env"]])
                 with session.get(config["url"].rstrip("/") + "/axis-cgi/mjpg/video.cgi",
                                  params={"camera": config.get("channel", 1), "resolution": self.preview_resolution,

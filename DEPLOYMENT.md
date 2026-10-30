@@ -94,7 +94,7 @@ Focus commands default to a 2-second response timeout, while the connection/PTZ 
 
 Compose mounts `/dev/input` read-only and permits reads of Linux input devices (major 13). It does not enable privileged mode or mount all of `/dev`. The container runs as root with all Linux capabilities dropped to read root-owned input devices. The input-directory mount allows device nodes to reappear after reconnect. This grants access to other input devices on the Pi too; use a dedicated Pi where practical. Missing `/dev/input`, an unrecognized joystick, or host security policies can still prevent access; check `ls -l /dev/input` and `docker compose run --rm axispy --list`.
 
-HTTPS verification stays enabled. For a private camera CA, add a read-only certificate mount under `volumes` in `compose.yaml`, such as `./certs:/certs:ro`, and set `AXIS_J1_CA_BUNDLE=/certs/camera-ca.pem` in `.env` for each applicable camera. Camera requests go directly to the cameras and do not use ambient HTTP proxies. No inbound container ports are needed.
+HTTPS verification is enabled by default. For a private camera CA, add a read-only certificate mount under `volumes` in `compose.yaml`, such as `./certs:/certs:ro`, and set `AXIS_J1_CA_BUNDLE=/certs/camera-ca.pem` in `.env` for each applicable camera. Camera requests go directly to the cameras and do not use ambient HTTP proxies. No inbound container ports are needed.
 
 ### Environment variables
 
@@ -137,3 +137,14 @@ are preserved, and at least one camera must remain enabled. See
 [README.md](README.md#disable-unused-cameras) for all options.
 Apply Docker changes with `docker compose up -d --build --force-recreate`;
 restart source/native installations.
+
+## HTTPS cameras with untrusted certificates
+
+Set the camera URL to `https://...` and add `AXIS_J1_VERIFY_TLS=false` in `.env`
+(likewise J2–J4) to explicitly skip certificate verification for that camera.
+This covers control commands, dashboard health checks, and live video, and
+supersedes its CA bundle. Other cameras keep their own verification settings.
+Apply `.env` changes with `docker compose up -d`; rebuild after updating code.
+HTTPS remains encrypted but the camera identity is not verified. See
+[README.md](README.md#per-camera-https-certificate-verification) for defaults,
+TOML precedence, and the trusted-CA alternative.
