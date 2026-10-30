@@ -81,8 +81,8 @@ restart source/native installations.
 
 Click **Show live video** in the dashboard header to show a live preview on each
 enabled camera card. Click **Hide live video** to stop the streams. Video starts
-off in every browser tab and returns to off after a reload; no `.env` changes
-are needed. Hidden tabs pause their streams and resume when visible again if
+off on a browser’s first visit and remembers your on/off preference after
+reloads. No `.env` changes are needed. Hidden tabs pause their streams and resume when visible again if
 video is still enabled. Disabled camera slots never have a preview.
 
 Previews use the Axis VAPIX MJPEG endpoint `/axis-cgi/mjpg/video.cgi`, requesting
@@ -128,7 +128,8 @@ The dashboard shows **Host CPU usage** and **Host memory usage**, including used
 and total RAM. Use **Hide system usage** / **Show system usage** in the header
 to hide or show both readings between the app name and the header buttons.
 Their space is reserved, so toggling them does not move the camera cards. They
-start hidden in each tab, including after a reload. These are statistics for the Linux host running axispy (your Pi or
+start hidden on a browser’s first visit, then restore your saved preference after
+a reload. These are statistics for the Linux host running axispy (your Pi or
 x86-64 Linux machine), including other applications on that host. In a VM, the
 host is the Linux VM. They are not measurements of the cameras or browser, and
 do not represent Docker container usage or its configured resource limits.
@@ -198,3 +199,28 @@ Rebuild after updating code with `docker compose up -d --build`. Refresh the
 browser after updating. Higher quality uses more bandwidth and camera/host/browser
 resources, especially with several previews. Frame rate remains independently
 controlled by `AXIS_WEB_PREVIEW_FPS`.
+
+## Remembered dashboard preferences
+
+The dashboard remembers whether **system usage**, **live video**, and **Debug
+logs** were shown, and restores all three after a refresh or reopening the page.
+On a first visit they are all hidden/off. Turning a feature off also saves that
+choice. Restoring live video reconnects previews for the enabled cameras; it does
+not send any camera control commands.
+
+Preferences use browser local storage, not cookies, and stay in that browser for
+the dashboard’s address (scheme, hostname/IP and port). A different browser,
+device, or dashboard address has its own defaults. Clearing site data resets the
+preferences; private browsing may discard them when the session ends. Existing
+open tabs are not changed automatically when another tab changes a preference.
+Only three on/off values are saved; no camera credentials, frames, or log content
+are stored. If local storage is blocked or full, the buttons continue to work
+and the last successfully saved preferences, if any, are used on the next visit.
+Hidden tabs still pause video, and leaving the page releases its streams without
+changing the saved video preference.
+
+Optional browser preference checks (requires Playwright and Chromium):
+
+```sh
+python tests/browser_dashboard_preferences.py
+```

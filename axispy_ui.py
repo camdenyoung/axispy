@@ -119,9 +119,11 @@ function syncVideo(box){
  img.src='/api/stream/'+box.dataset.cameraId;preview.querySelector('.preview-frame').prepend(img)
 }
 function renderCameras(cameras){const grid=$('cameras');grid.dataset.cameraCount=cameras.length;grid.classList.toggle('video-enabled',videoEnabled);const slots=new Set(cameras.map(c=>String(c.slot)));for(const box of [...grid.children])if(!slots.has(box.dataset.slot)){stopVideo(box);box.remove()};for(const c of cameras){let box=[...grid.children].find(b=>b.dataset.slot===String(c.slot));if(!box){box=node('article','camera');box.dataset.slot=c.slot;box.append(node('div','camera-info'));const preview=node('div','preview');preview.hidden=true;const placeholder=node('div','preview-placeholder','Connecting…');placeholder.setAttribute('role','status');const frame=node('div','preview-frame');frame.append(placeholder);preview.append(frame,node('div','note'));box.append(preview);grid.append(box)}if(box.dataset.cameraId!==String(c.id)||(box.dataset.online==='false'&&c.online===true)){stopVideo(box);delete box.querySelector('.preview').dataset.failed}box.dataset.online=String(c.online);box.dataset.cameraId=c.id;box.dataset.name=c.name;box.classList.toggle('selected',c.selected);const details=card(c);box.querySelector('.camera-info').replaceChildren(...details.childNodes);syncVideo(box)}}
-$('videoButton').addEventListener('click',()=>{videoEnabled=!videoEnabled;$('cameras').classList.toggle('video-enabled',videoEnabled);$('videoButton').setAttribute('aria-pressed',String(videoEnabled));$('videoButton').textContent=videoEnabled?'Hide live video':'Show live video';for(const box of $('cameras').children)syncVideo(box)});
+function setVideoEnabled(enabled){videoEnabled=enabled;$('cameras').classList.toggle('video-enabled',enabled);$('videoButton').setAttribute('aria-pressed',String(enabled));$('videoButton').textContent=enabled?'Hide live video':'Show live video';for(const box of $('cameras').children)syncVideo(box)}
+$('videoButton').addEventListener('click',()=>{setVideoEnabled(!videoEnabled);savePreferences()});
 document.addEventListener('visibilitychange',()=>{for(const box of $('cameras').children)syncVideo(box)});
-window.addEventListener('pagehide',()=>{videoEnabled=false;for(const box of $('cameras').children)syncVideo(box)});
+window.addEventListener('pagehide',()=>{for(const box of $('cameras').children)stopVideo(box)});
+window.addEventListener('pageshow',()=>{for(const box of $('cameras').children)syncVideo(box)});
 function formatBytes(bytes){if(bytes>=1024**3)return (bytes/1024**3).toFixed(2)+' GiB';return (bytes/1024**2).toFixed(1)+' MiB'}
 function renderUsage(system){
  const cpu=system?.cpu_percent,memory=system?.memory;
@@ -134,7 +136,20 @@ function renderUsage(system){
 }
 async function status(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error();const s=await r.json();if(Number.isInteger(s.poll_interval_ms)&&s.poll_interval_ms>=100&&s.poll_interval_ms<=60000)pollIntervalMs=s.poll_interval_ms;if(Number.isInteger(s.preview_fps))previewFps=s.preview_fps;if(typeof s.preview_resolution==='string')previewResolution=s.preview_resolution;$('selected').textContent=s.cameras[s.selected]?.name||'No selection';$('joystick').textContent=s.joystick?'USB · '+s.joystick:'USB joystick disconnected — waiting';$('armed').textContent=s.armed?'Controls ready':'Movement inhibited · center stick and release focus buttons';renderUsage(s.system);renderCameras(s.cameras);$('updated').textContent='Updated '+new Date(s.time).toLocaleTimeString();$('alert').textContent=''}catch{renderUsage(null);$('alert').textContent='Dashboard connection lost. Retrying…'}}
 async function logs(){if(!debug)return;try{const r=await fetch('/api/logs?after='+cursor,{cache:'no-store'});if(!r.ok)throw Error();const data=await r.json();if(data.cursor<cursor)lines=[];cursor=data.cursor;lines.push(...data.entries.map(e=>e.time+' '+e.level+' · '+e.message));lines=lines.slice(-1000);const p=$('logs');const follow=p.scrollTop+p.clientHeight>=p.scrollHeight-30;p.textContent=lines.join('\n');if(follow)p.scrollTop=p.scrollHeight}catch{}}
-$('usageButton').addEventListener('click',()=>{const panel=$('resources');panel.hidden=!panel.hidden;$('usageButton').setAttribute('aria-expanded',String(!panel.hidden));$('usageButton').textContent=panel.hidden?'Show system usage':'Hide system usage'});
-$('debugButton').addEventListener('click',()=>{debug=!debug;$('debug').hidden=!debug;$('debugButton').setAttribute('aria-expanded',String(debug));if(debug)logs()});
+const preferenceKey='axispy.dashboard.preferences.v1';
+function readPreferences(){
+ try{const saved=JSON.parse(localStorage.getItem(preferenceKey));return {usage:saved?.usage===true,video:saved?.video===true,debug:saved?.debug===true}}
+ catch{return {usage:false,video:false,debug:false}}
+}
+function savePreferences(){
+ try{localStorage.setItem(preferenceKey,JSON.stringify({usage:!$('resources').hidden,video:videoEnabled,debug}))}
+ catch{} // Storage may be blocked or full; the dashboard controls still work.
+}
+function setUsageVisible(visible){$('resources').hidden=!visible;$('usageButton').setAttribute('aria-expanded',String(visible));$('usageButton').textContent=visible?'Hide system usage':'Show system usage'}
+function setDebugEnabled(enabled){debug=enabled;$('debug').hidden=!enabled;$('debugButton').setAttribute('aria-expanded',String(enabled))}
+$('usageButton').addEventListener('click',()=>{setUsageVisible($('resources').hidden);savePreferences()});
+$('debugButton').addEventListener('click',()=>{setDebugEnabled(!debug);savePreferences();if(debug)logs()});
+const savedPreferences=readPreferences();
+setUsageVisible(savedPreferences.usage);setVideoEnabled(savedPreferences.video);setDebugEnabled(savedPreferences.debug);
 async function tick(){await status();await logs();setTimeout(tick,pollIntervalMs)}tick();
 </script></body></html>'''
