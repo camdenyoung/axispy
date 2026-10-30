@@ -197,3 +197,20 @@ mean the camera closed the connection. `keep-alive` indicates that the response
 allows connection reuse, not a guarantee against the camera closing it later
 when idle. This distinction matters when position queries reuse a connection
 quickly but control commands are slow.
+
+### Keep control connections warm between camera selections
+
+HTTPS control sessions now have a dedicated worker per camera. Read-only
+`query=position` requests keep the same control connection and Digest state warm
+while idle, using a default one-second interval. Control requests use that worker
+and wait for their response; stop confirmation and rearming are unchanged.
+Set `AXIS_CONTROL_KEEPALIVE_SECONDS=0` in `.env` to disable, or choose an interval
+from 0.5 to 30 seconds. Failed warm-ups retry at least five seconds apart and do
+not disable normal control attempts. HTTP cameras are unaffected. The diagnostic
+command remains a separate read-only client and does not start these workers.
+
+After updating, `HTTPS control session warmed` messages confirm that each camera
+completed a read-only warm-up. Initial cold connection costs remain; switch-time
+improvements on real hardware depend on the camera retaining its connection
+between queries. Update code with `git pull --ff-only` and
+`docker compose up -d --build`. See README.md for limits and shutdown behavior.

@@ -76,7 +76,7 @@ HTTPS certificates are verified by default. For a private camera CA, add `ca_bun
 - Camera connection, authentication, or PTZ request failures disarm movement and retry with stop commands every five seconds. Recovery requires a successful stop and then centering before movement; held-stick commands are never replayed. Repeated identical failures log once, with new messages when the failure changes or the camera recovers.
 - Ctrl+C and SIGTERM trigger stop attempts before exit. Invalid configuration still fails at startup so it can be corrected.
 
-Input changes are sent at up to `rate_hz` (10 by default). Unchanged movement commands are coalesced, with watchdog refreshes every 0.5 seconds; idle cameras are not polled continuously. Focus changes and release stops bypass the refresh interval. `autofocus=off` is sent once per manual focus hold instead of on every refresh. Focus/autofocus requests use `focus_timeout` (2 seconds by default) for reading the response; PTZ and connection timeouts retain the `timeout` setting (0.5 seconds by default). A timed-out movement causes one immediate stop attempt; if acknowledged, the controller stays connected but requires centering/releasing before resuming. If stopping also fails, normal outage backoff applies. Each HTTP operation has bounded connect/read timeouts; an unresponsive camera can delay polling and button handling. This is a small synchronous controller, not a hard real-time control system.
+Input changes are sent at up to `rate_hz` (10 by default). Unchanged movement commands are coalesced, with watchdog refreshes every 0.5 seconds; idle cameras receive no repeated movement commands. HTTPS control sessions are kept warm with read-only position queries as described below. Focus changes and release stops bypass the refresh interval. `autofocus=off` is sent once per manual focus hold instead of on every refresh. Focus/autofocus requests use `focus_timeout` (2 seconds by default) for reading the response; PTZ and connection timeouts retain the `timeout` setting (0.5 seconds by default). A timed-out movement causes one immediate stop attempt; if acknowledged, the controller stays connected but requires centering/releasing before resuming. If stopping also fails, normal outage backoff applies. Each HTTP operation has bounded connect/read timeouts; an unresponsive camera can delay polling and button handling. This is a small synchronous controller, not a hard real-time control system.
 
 Commands include `continuouspantiltmove`, `continuouszoommove`, `continuousfocusmove` (when focusing), and `continuoustimeout` (default 2 seconds). Confirm support and timeout behavior for your camera model/firmware in the [Axis VAPIX PTZ documentation](https://developer.axis.com/vapix/network-video/pantiltzoom-api/). A successful HTTP response does not prove the camera enforces a watchdog. With low maximum speeds, test neutral stop, camera switching, unplugging the joystick, and loss of network connectivity before operational use. If a camera ignores the timeout, motion may continue after a process crash or network outage; a client cannot deliver a stop over a broken connection. Keep independent camera controls available.
 
@@ -150,3 +150,36 @@ bundle remains the preferred way to use self-signed/private camera certificates.
 
 After editing `.env`, run `docker compose up -d` or restart source/native mode.
 After updating code, rebuild with `docker compose up -d --build`.
+
+## HTTPS control-session warming
+
+HTTPS cameras keep a dedicated control session warm by default. When idle, the
+session sends a read-only position query every second, so the next camera switch
+can reuse its TCP/TLS connection and Digest authentication state. Each camera's
+own worker serializes these queries with control requests. Connection warming
+never sends stop, movement, focus or autofocus commands, and does not alter
+selected-camera state, stop acknowledgements or neutral rearming.
+
+```dotenv
+AXIS_CONTROL_KEEPALIVE_SECONDS=1
+```
+
+Accepts `0` to disable or `0.5`–`30` seconds; unset defaults to `1`. In TOML this
+is `control_keepalive_seconds` in `[control]`. HTTP cameras retain the existing
+control path. Use an interval shorter than the camera's keep-alive idle timeout.
+The configured certificate policy and connect/read limits still apply; keep
+`AXIS_TIMEOUT=2` if your cameras need that time for cold HTTPS connections.
+
+Warm-up failures are logged without disabling ordinary control requests, and
+background retries back off to at least five seconds. Other cameras' workers
+continue independently. A control request waits for its acknowledgement; there
+are no abandoned requests that can later replay movement. Shutdown closes the
+workers and discards commands that have not started. A read-only query already
+in progress must finish within the normal request behavior before a queued
+control request can run, so a cold/recovering camera can still incur a delay.
+Startup connection/authentication setup is not eliminated.
+
+This adds up to one idle query per second per HTTPS camera, separate from web
+health checks and video. Dashboard/video sessions remain separate. Explicit
+unverified-HTTPS warnings are shown once per host rather than for every idle
+query; certificate verification remains enabled unless disabled per camera.

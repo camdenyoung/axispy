@@ -90,21 +90,33 @@ def https_camera(tmp_path, monkeypatch):
     received = []
     frame = b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: 2048\r\n\r\n' + b'x' * 2048 + b'\r\n--frame--\r\n'
     class Handler(BaseHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            self.protocol_version = 'HTTP/1.1' if config.get('_test_http11') else 'HTTP/1.0'
+            self.timeout = config.get('_test_idle_timeout')
+            config.setdefault('_test_connections', []).append(args[1][1])
+            super().__init__(*args, **kwargs)
+
         def do_GET(self):
             if config.get('_test_digest') and not self.headers.get('Authorization', '').startswith('Digest '):
+                config['_test_challenges'] = config.get('_test_challenges', 0) + 1
                 self.send_response(401)
                 self.send_header('WWW-Authenticate', 'Digest realm="camera", nonce="test-timing", qop="auth"')
                 self.send_header('Content-Length', '0')
                 self.end_headers()
                 return
             received.append(self.path)
+            config.setdefault('_test_request_connections', []).append(self.client_address[1])
             params = parse_qs(urlsplit(self.path).query)
             stream = urlsplit(self.path).path == '/axis-cgi/mjpg/video.cgi'
             body = frame if stream else b'pan=0\ntilt=0\nzoom=1\nautofocus=on' if params.get('query') == ['position'] else b''
-            self.send_response(200)
+            no_content = config.get('_test_no_content') and not stream and 'query' not in params
+            self.send_response(204 if no_content else 200)
             self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame' if stream else 'text/plain')
-            if not config.get('_test_close_delay'):
+            if not config.get('_test_close_delay') and not no_content:
                 self.send_header('Content-Length', str(len(body)))
+            if config.get('_test_close_delay'):
+                self.send_header('Connection', 'close')
+                self.close_connection = True
             self.end_headers()
             self.wfile.write(body)
             self.wfile.flush()
@@ -113,6 +125,7 @@ def https_camera(tmp_path, monkeypatch):
         def log_message(self, *_):
             pass
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    server.daemon_threads = True
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -235,3 +248,47 @@ def test_read_only_diagnostic_separates_headers_and_body(https_camera, camera_en
     assert len(samples) == 3
     assert all(float(body) >= .3 and float(total) >= float(body) for _, body, total in samples)
     assert 'framing=connection-close' in output
+
+
+
+def test_https_keepalive_preserves_connection_and_digest_state_across_idle(https_camera, monkeypatch):
+    config, cert, _, _ = https_camera
+    config.update(ca_bundle=cert, _test_http11=True, _test_digest=True,
+                  _test_no_content=True, _test_idle_timeout=.2)
+    camera = Camera(config, 1, 2)
+    warmed = threading.Event()
+    calls = []
+    original_get = camera.session.get
+    def get(*args, **kwargs):
+        calls.append((threading.get_ident(), dict(kwargs['params'])))
+        return original_get(*args, **kwargs)
+    monkeypatch.setattr(camera.session, 'get', get)
+    original_warm = camera._warm_connection
+    def warm():
+        result = original_warm()
+        if result:
+            warmed.set()
+        return result
+    monkeypatch.setattr(camera, '_warm_connection', warm)
+    try:
+        camera.start_keepalive(.05)
+        assert warmed.wait(3)
+        assert camera.last_ptz is None  # Warm-up did not issue a movement/stop.
+        threading.Event().wait(.45)  # Longer than the simulated camera's idle timeout.
+        controller = Controller([camera])
+        controller.send(STOP)
+        controller.send(STOP)
+        controller.send((10, 0, 0, 0))
+        controller.send(STOP)
+        assert not controller.unavailable
+        assert len(set(config['_test_request_connections'])) == 1
+        assert config['_test_challenges'] == 1
+        assert len({ident for ident, _ in calls}) == 1
+        assert calls[0][0] != threading.get_ident()
+        assert any(params == {'camera': 1, 'query': 'position'} for _, params in calls)
+    finally:
+        camera.close()
+    count = len(calls)
+    threading.Event().wait(.1)
+    assert len(calls) == count
+    assert not camera._control_worker.is_alive()

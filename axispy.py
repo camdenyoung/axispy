@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import Future
 import logging
 from logging.handlers import RotatingFileHandler
 import math
 import os
+from queue import Empty, Queue
 import signal
 import sys
+import threading
 import time
+import warnings
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +21,7 @@ from urllib.parse import urlsplit
 import requests
 from dotenv import load_dotenv
 from requests.auth import HTTPDigestAuth
+from urllib3.exceptions import InsecureRequestWarning
 
 LOG = logging.getLogger("axispy")
 STOP = (0, 0, 0, 0)
@@ -39,6 +44,7 @@ class Settings:
     continuous_timeout: int
     focus_timeout: float = 2.0
     autofocus_hold_seconds: float = 5.0
+    control_keepalive_seconds: float = 1.0
 
     @classmethod
     def load(cls, path: str | None = None) -> Settings:
@@ -72,7 +78,7 @@ class Settings:
             else:
                 value = type(default)(raw)
             data["joystick"][key] = value
-        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int), ("focus_timeout", float), ("autofocus_hold_seconds", float)):
+        for key, cast in (("rate_hz", float), ("timeout", float), ("continuous_timeout", int), ("focus_timeout", float), ("autofocus_hold_seconds", float), ("control_keepalive_seconds", float)):
             if f"AXIS_{key.upper()}" in os.environ:
                 raw = os.environ[f"AXIS_{key.upper()}"]
                 if key == "autofocus_hold_seconds" and not raw.strip():
@@ -133,6 +139,9 @@ class Settings:
         watchdog = c.get("continuous_timeout", 2)
         focus_timeout = float(c.get("focus_timeout", 2))
         autofocus_hold_seconds = float(c.get("autofocus_hold_seconds", 5))
+        keepalive = float(c.get("control_keepalive_seconds", 1))
+        if not math.isfinite(keepalive) or not (keepalive == 0 or .5 <= keepalive <= 30):
+            raise ValueError("control_keepalive_seconds must be 0 (off) or 0.5-30 seconds")
         if not math.isfinite(autofocus_hold_seconds) or autofocus_hold_seconds <= 0:
             raise ValueError("autofocus_hold_seconds must be a finite number greater than zero")
         if not .5 <= rate <= 50 or not .1 <= timeout <= 10:
@@ -161,7 +170,7 @@ class Settings:
         cameras = [camera for camera in cameras if camera["enabled"]]
         if not cameras:
             raise ValueError("At least one camera must be enabled")
-        return cls(j, cameras, rate, timeout, watchdog, focus_timeout, autofocus_hold_seconds)
+        return cls(j, cameras, rate, timeout, watchdog, focus_timeout, autofocus_hold_seconds, keepalive)
 
     def motion_config(self, index):
         config = dict(self.joystick)
@@ -229,11 +238,91 @@ class Camera:
         self.refresh_interval = min(.5, watchdog / 2)
         self.clock = time.monotonic
         self.slow_request_logged_at = {}
+        self._control_queue = Queue()
+        self._control_worker = None
+        self._lifecycle_lock = threading.Lock()
+        self._closing = False
+        self._warm_state = None
         self.session = requests.Session()
         self.session.auth = HTTPDigestAuth(config["username"], password)
         # Do not route local camera credentials through ambient HTTP proxies.
         self.session.trust_env = False
         self.session.verify = camera_tls_verify(config)
+
+    def start_keepalive(self, interval=1.0):
+        """Give one worker ownership of this HTTPS session and its Digest state."""
+        if not math.isfinite(interval) or interval < 0:
+            raise ValueError("Keep-alive interval must be finite and nonnegative")
+        if interval == 0 or urlsplit(self.url).scheme != "https":
+            return
+        with self._lifecycle_lock:
+            if self._closing:
+                raise RuntimeError("Camera is closed")
+            if self._control_worker is not None:
+                return
+            self._control_worker = threading.Thread(target=self._control_loop, args=(interval,),
+                                                    name=f"axispy-control-{self.name}", daemon=True)
+            self._control_worker.start()
+        LOG.info("%s HTTPS control session warming enabled (%.2fs idle interval)", self.name, interval)
+
+    def _control_loop(self, interval):
+        next_probe = time.monotonic()
+        try:
+            while True:
+                if self._closing:
+                    # Do not replay queued control requests after shutdown.
+                    while True:
+                        try:
+                            item = self._control_queue.get_nowait()
+                        except Empty:
+                            break
+                        if item is not None:
+                            item[2].set_exception(RuntimeError("Camera is closed"))
+                    break
+                try:
+                    item = self._control_queue.get(timeout=max(0, next_probe - time.monotonic()))
+                except Empty:
+                    warmed = self._warm_connection()
+                    next_probe = time.monotonic() + (interval if warmed else max(5, interval))
+                    continue
+                if item is None:
+                    break
+                params, read_timeout, result = item
+                if self._closing:
+                    result.set_exception(RuntimeError("Camera is closed"))
+                    continue
+                try:
+                    value = self._request_direct(params, read_timeout)
+                except Exception as exc:
+                    result.set_exception(exc)
+                else:
+                    result.set_result(value)
+                # Commands take priority; probe only once the session is idle.
+                next_probe = time.monotonic() + interval
+        finally:
+            self.session.close()
+
+    def _warm_connection(self):
+        try:
+            with self.session.get(self.url, params={"camera": self.channel, "query": "position"},
+                                  timeout=(self.timeout, self.timeout), allow_redirects=False) as response:
+                response.raise_for_status()
+                body = response.text.strip()
+                values = dict(line.split("=", 1) for line in body.splitlines() if "=" in line)
+                if response.status_code != 200 or body.lower().startswith(("error", "<")) or not any(
+                        key in values for key in ("pan", "tilt", "zoom", "focus", "autofocus")):
+                    raise CameraCommandError("Position query unsupported")
+        except (requests.RequestException, CameraCommandError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            reason = f"HTTP {status}" if status else type(exc).__name__
+            if reason != self._warm_state:
+                LOG.warning("%s control connection warm-up failed (%s); control requests remain available", self.name, reason)
+            self._warm_state = reason
+            return False
+        if self._warm_state is not True:
+            LOG.info("%s HTTPS control session warmed", self.name)
+        self._warm_state = True
+        return True
 
     def move(self, motion: tuple[int, int, int, int]):
         pan, tilt, zoom, focus = motion
@@ -284,6 +373,19 @@ class Camera:
             self.dashboard.command_result(self.dashboard_index, True, "auto")
 
     def _request(self, params, read_timeout=None):
+        with self._lifecycle_lock:
+            if self._closing:
+                raise RuntimeError("Camera is closed")
+            worker = self._control_worker
+            if worker is not None:
+                result = Future()
+                self._control_queue.put((dict(params), read_timeout, result))
+        if worker is not None:
+            # Wait for the acknowledgement; no abandoned/late movement commands.
+            return result.result()
+        return self._request_direct(params, read_timeout)
+
+    def _request_direct(self, params, read_timeout=None):
         started = time.monotonic()
         read_limit = read_timeout or self.timeout
         response = None
@@ -350,7 +452,17 @@ class Camera:
 
 
     def close(self):
-        self.session.close()
+        with self._lifecycle_lock:
+            if self._closing:
+                return
+            self._closing = True
+            worker = self._control_worker
+            if worker is not None:
+                self._control_queue.put(None)
+        if worker is not None:
+            worker.join()
+        else:
+            self.session.close()
 
 
 class Controller:
@@ -564,6 +676,13 @@ def run(args):
         if settings:
             for config in settings.cameras:
                 cameras.append(Camera(config, settings.timeout, settings.continuous_timeout, settings.focus_timeout))
+            if settings.control_keepalive_seconds:
+                if any(camera.session.verify is False for camera in cameras):
+                    # Keep explicit unverified-HTTPS warnings visible once per host,
+                    # rather than flooding stderr with every idle position query.
+                    warnings.filterwarnings("once", category=InsecureRequestWarning)
+                for camera in cameras:
+                    camera.start_keepalive(settings.control_keepalive_seconds)
             controller = Controller(cameras)
             if os.environ.get("AXIS_WEB_ENABLED", "false").lower() in ("true", "1"):
                 from axispy_web import Dashboard
