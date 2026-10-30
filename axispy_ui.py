@@ -817,7 +817,7 @@ HTML = r'''
         cameraLink.target = "_blank";
         cameraLink.rel = "noopener noreferrer";
         cameraLink.setAttribute("aria-label", "Open " + c.name + " camera web interface");
-        address.append(cameraLink, document.createTextNode(" · channel " + c.channel));
+        address.append(cameraLink);
         box.append(connectionStatus, address);
         const activity = node(
           "div",

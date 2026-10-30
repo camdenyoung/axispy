@@ -51,6 +51,7 @@ def main():
         assert 'verification disabled' in page.locator('.transport-badge').nth(2).get_attribute('title')
         for i, camera in enumerate(cameras):
             link = page.locator('.camera-address').nth(i)
+            assert page.locator('.address').nth(i).text_content() == camera['url']
             assert link.text_content() == camera['url']
             assert link.get_attribute('href') == camera['url']
             assert set(link.get_attribute('rel').split()) == {'noopener', 'noreferrer'}

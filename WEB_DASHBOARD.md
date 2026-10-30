@@ -25,7 +25,7 @@ To roll back, run `docker compose down` in `axispy-v2`, then `docker compose up 
 
 ## What the page shows
 
-- Four camera cards: configured name, URL, VAPIX channel and current availability.
+- Four camera cards: configured name, linked URL, connection protocol and current availability.
 - The camera actually selected by the controller, including when a requested switch is blocked because a stop is unconfirmed.
 - Joystick presence and whether movement is armed or inhibited.
 - A PTZ indicator always visible on every card, keeping the layout consistent when selection changes: **Active** after an accepted nonzero pan, tilt or zoom command, **Idle** after a successful stop, and **Unconfirmed** before the first command or after a control failure. This reports axispy commands, not measured camera movement. Manual focus and health checks do not count as PTZ activity. The indicator uses the configured dashboard refresh (one second by default), so very brief movements may occur between updates.
