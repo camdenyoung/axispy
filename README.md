@@ -1,4 +1,4 @@
-# axispyPTZ v0.2.11 — web dashboard
+# axispyPTZ v0.2.12 — web dashboard
 
 The v0.2 web dashboard is now on **`main`**. The original controller is preserved by the **`v0.1.0`** tag, and the initial dashboard release by **`v0.2.0`**. See [WEB_DASHBOARD.md](WEB_DASHBOARD.md) for deployment and rollback instructions.
 
@@ -183,3 +183,11 @@ This adds up to one idle query per second per HTTPS camera, separate from web
 health checks and video. Dashboard/video sessions remain separate. Explicit
 unverified-HTTPS warnings are shown once per host rather than for every idle
 query; certificate verification remains enabled unless disabled per camera.
+
+## Dashboard network usage
+
+System usage includes **Network in** and **Network out** in Mbps. In the supplied
+Docker bridge deployment these measure container traffic, while CPU and memory
+remain host metrics. Native or host-network deployments show host network traffic.
+The existing Show/Hide system usage preference controls all four readings. See
+[WEB_DASHBOARD.md](WEB_DASHBOARD.md#container-network-traffic) for scope and sampling.

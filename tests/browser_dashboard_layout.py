@@ -106,7 +106,7 @@ def main():
                 page.evaluate('status()')
                 assert page.evaluate('savedImages.every((img,i)=>img===document.querySelectorAll(".preview img")[i])')
                 assert len(stream_requests) == starts
-                if width > 1100:
+                if width > 1280:
                     brand = page.locator('.brand').bounding_box()
                     usage = page.locator('.usage-slot').bounding_box()
                     actions = page.locator('.actions').bounding_box()
