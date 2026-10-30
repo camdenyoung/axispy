@@ -187,6 +187,24 @@ def camera_tls_verify(config):
     return bundle
 
 
+def response_transport_details(response):
+    """Read response framing/persistence without guessing from missing length."""
+    raw = response.raw
+    version = {10: "1.0", 11: "1.1", 20: "2"}.get(getattr(raw, "version", None), "unknown")
+    if response.status_code in (204, 304) or 100 <= response.status_code < 200:
+        framing = "no-body"
+    elif "chunked" in response.headers.get("Transfer-Encoding", "").lower():
+        framing = "chunked"
+    elif "Content-Length" in response.headers:
+        framing = "Content-Length"
+    else:
+        framing = "connection-close"
+    original = getattr(raw, "_original_response", None)
+    will_close = getattr(original, "will_close", None)
+    persistence = "close" if will_close is True else "keep-alive" if will_close is False else "unknown"
+    return version, framing, persistence
+
+
 class CameraCommandError(RuntimeError):
     """A camera response suitable for reporting without request credentials."""
 
@@ -312,6 +330,8 @@ class Camera:
                 self.slow_request_logged_at[key] = finished
                 headers = "unavailable"
                 framing = "unavailable"
+                version = persistence = "unavailable"
+                status = "unavailable"
                 if response is not None:
                     # Requests does not populate final-response elapsed timing
                     # when Digest authentication resends through the adapter.
@@ -322,14 +342,11 @@ class Camera:
                         duration = response.elapsed.total_seconds()
                         if isinstance(duration, (int, float)):
                             headers = f"{duration:.2f}s"
-                    if "Content-Length" in response.headers:
-                        framing = "Content-Length"
-                    elif "chunked" in response.headers.get("Transfer-Encoding", "").lower():
-                        framing = "chunked"
-                    else:
-                        framing = "connection-close"
-                LOG.warning("%s slow control %s: %s after %.2fs (final response headers %s; body framing %s; connect/read limits %.2f/%.2fs)",
-                            self.name, operation, outcome, elapsed, headers, framing, self.timeout, read_limit)
+                    status = response.status_code
+                    version, framing, persistence = response_transport_details(response)
+                LOG.warning("%s slow control %s: %s after %.2fs (HTTP %s; version %s; connection %s; final response headers %s; body framing %s; connect/read limits %.2f/%.2fs)",
+                            self.name, operation, outcome, elapsed, status, version, persistence,
+                            headers, framing, self.timeout, read_limit)
 
 
     def close(self):
@@ -708,11 +725,9 @@ def diagnose_camera(settings, slot):
                     if response.status_code != 200 or body.lower().startswith(("error", "<")) or not any(
                             key in values for key in ("pan", "tilt", "zoom", "focus", "autofocus")):
                         raise ValueError("Camera did not return VAPIX position status")
-                    framing = "Content-Length" if "Content-Length" in response.headers else (
-                        "chunked" if "chunked" in response.headers.get("Transfer-Encoding", "").lower() else "connection-close")
+                    version, framing, persistence = response_transport_details(response)
                     challenges = sum(item.status_code == 401 for item in response.history)
-                    version = {10: "1.0", 11: "1.1", 20: "2"}.get(response.raw.version, "unknown")
-                    print(f"{slot} sample {sample}: headers={headers_at-started:.3f}s body={finished-headers_at:.3f}s total={finished-started:.3f}s HTTP={response.status_code} version={version} digest_challenges={challenges} framing={framing}", flush=True)
+                    print(f"{slot} sample {sample}: headers={headers_at-started:.3f}s body={finished-headers_at:.3f}s total={finished-started:.3f}s HTTP={response.status_code} version={version} digest_challenges={challenges} framing={framing} connection={persistence}", flush=True)
             except requests.RequestException as exc:
                 status = getattr(getattr(exc, "response", None), "status_code", None)
                 reason = f"HTTP {status}" if status else type(exc).__name__

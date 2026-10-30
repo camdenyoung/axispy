@@ -189,3 +189,11 @@ or response contents. The first and repeat samples help distinguish initial
 connection/authentication costs from repeat-request delays. A diagnostic session
 is separate from the active controller; it does not keep the active connection
 warm. A failed query returns a nonzero exit status with a sanitized reason.
+
+Slow-control lines also report HTTP status, response version and the HTTP parser's
+connection persistence (`keep-alive`, `close`, or `unknown`). A body-less HTTP 204
+reply is labelled `no-body`; missing Content-Length on such a response does not
+mean the camera closed the connection. `keep-alive` indicates that the response
+allows connection reuse, not a guarantee against the camera closing it later
+when idle. This distinction matters when position queries reuse a connection
+quickly but control commands are slow.

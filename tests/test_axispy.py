@@ -1336,3 +1336,22 @@ def test_diagnostic_rejects_disabled_camera(camera_environment, monkeypatch):
     monkeypatch.setenv('AXIS_J2_ENABLED', 'false')
     with pytest.raises(ValueError, match='J2 is disabled'):
         diagnose_camera(Settings.load(), 'J2')
+
+
+
+@pytest.mark.parametrize('status,headers,will_close,framing,persistence', [
+    (204, {}, False, 'no-body', 'keep-alive'),
+    (204, {}, True, 'no-body', 'close'),
+    (200, {'Content-Length': '0'}, False, 'Content-Length', 'keep-alive'),
+    (200, {'Transfer-Encoding': 'chunked'}, False, 'chunked', 'keep-alive'),
+    (200, {}, True, 'connection-close', 'close'),
+    (200, {}, None, 'connection-close', 'unknown'),
+])
+def test_response_framing_does_not_confuse_204_with_connection_close(status, headers, will_close, framing, persistence):
+    from types import SimpleNamespace
+    from axispy import response_transport_details
+    response = requests.Response()
+    response.status_code = status
+    response.headers.update(headers)
+    response.raw = SimpleNamespace(version=11, _original_response=SimpleNamespace(will_close=will_close))
+    assert response_transport_details(response) == ('1.1', framing, persistence)
