@@ -267,7 +267,7 @@ class Dashboard:
     def snapshot(self):
         usage = self.host_usage.snapshot()
         with self.guard:
-            return dict(system=usage, version="0.2.12", time=timestamp(), selected=self.controller.selected,
+            return dict(system=usage, version="0.2.13", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms, preview_fps=self.preview_fps,
                         preview_quality=self.preview_quality, preview_resolution=self.preview_resolution,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,
