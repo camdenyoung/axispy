@@ -226,3 +226,17 @@ Optional browser preference checks (requires Playwright and Chromium):
 ```sh
 python tests/browser_dashboard_preferences.py
 ```
+
+## Camera connection badges
+
+Each camera card shows its configured **HTTP** or **HTTPS** protocol beside its
+availability. **HTTPS · unverified** means certificate verification has been
+explicitly disabled for that camera. Hover over the badge for the verification
+setting. The badge describes configuration; Online/Offline separately reports
+camera reachability. HTTPS with verification enabled is not a claim that the
+camera is currently connected or that its certificate has passed validation.
+
+The camera address links to that camera's own web interface in a new tab using
+its configured HTTP/HTTPS URL, without adding credentials. The browser needs
+direct network access to the camera and handles its own login/certificate trust;
+the application's `VERIFY_TLS=false` setting does not bypass browser warnings.

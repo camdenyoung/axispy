@@ -178,6 +178,8 @@ class Dashboard:
         self.probe_errors = [None] * len(configs)
         self.probe_log_at = [0.] * len(configs)
         self.states = [dict(id=i, slot=c.get("slot", i + 1), name=c["name"], url=c["url"], channel=c.get("channel", 1), online=None,
+                            protocol=urlsplit(c["url"]).scheme,
+                            tls_verification_enabled=(camera_tls_verify(c) is not False) if urlsplit(c["url"]).scheme == "https" else None,
                             checked_at=None, last_seen=None, consecutive_failures=0, status_note=None, control_error=None, error=None, focus="unknown", focus_source=None, focus_updated_at=None,
                             ptz_activity="unknown")
                        for i, c in enumerate(configs)]

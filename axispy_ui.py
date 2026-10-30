@@ -75,6 +75,36 @@ HTML = r'''
         gap: 10px;
         flex-wrap: wrap;
       }
+      .camera-address {
+        color: inherit;
+        text-decoration: underline;
+        text-underline-offset: 3px;
+      }
+      .camera-address:hover {
+        color: var(--accent);
+      }
+      .connection-status {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .transport-badge {
+        max-width: 100%;
+        padding: 3px 6px;
+        border: 1px solid currentColor;
+        border-radius: 5px;
+        color: #ffc77d;
+        font-size: 10px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+      .transport-badge.https {
+        color: var(--accent);
+      }
+      .transport-badge.unverified {
+        color: #ffc77d;
+      }
       .preview {
         margin-top: 18px;
       }
@@ -768,10 +798,27 @@ HTML = r'''
                 : "Checking…",
           ),
         );
-        box.append(
-          state,
-          node("div", "address", c.url + " · channel " + c.channel),
+        const protocol = c.protocol || new URL(c.url).protocol.slice(0, -1);
+        const unverified = protocol === "https" && c.tls_verification_enabled === false;
+        const transport = node(
+          "span",
+          "transport-badge " + protocol + (unverified ? " unverified" : ""),
+          protocol.toUpperCase() + (unverified ? " · unverified" : ""),
         );
+        transport.title = protocol === "https"
+          ? "HTTPS configured; certificate verification " + (unverified ? "disabled" : "enabled")
+          : "HTTP configured; connection is not encrypted";
+        transport.setAttribute("aria-label", transport.title);
+        const connectionStatus = node("div", "connection-status");
+        connectionStatus.append(state, transport);
+        const address = node("div", "address");
+        const cameraLink = node("a", "camera-address", c.url);
+        cameraLink.href = c.url;
+        cameraLink.target = "_blank";
+        cameraLink.rel = "noopener noreferrer";
+        cameraLink.setAttribute("aria-label", "Open " + c.name + " camera web interface");
+        address.append(cameraLink, document.createTextNode(" · channel " + c.channel));
+        box.append(connectionStatus, address);
         const activity = node(
           "div",
           "activity " + (c.ptz_activity || "unknown"),
