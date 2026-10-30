@@ -480,7 +480,7 @@ HTML = r'''
       }
       .usage-slot {
         flex: 1;
-        max-width: 460px;
+        max-width: 680px;
         min-width: 260px;
         height: 80px;
         margin: 0 auto;
@@ -489,8 +489,8 @@ HTML = r'''
       }
       .resources {
         width: 100%;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 20px;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 16px;
         margin: 0;
       }
       .resource {
@@ -519,7 +519,7 @@ HTML = r'''
       .dashboard-header .actions {
         flex-shrink: 0;
       }
-      @media (max-width: 1100px) {
+      @media (max-width: 1280px) {
         .dashboard-header {
           flex-wrap: wrap;
         }
@@ -531,6 +531,15 @@ HTML = r'''
         }
         .dashboard-header .actions {
           flex-shrink: 1;
+        }
+      }
+      @media (max-width: 599px) {
+        .usage-slot {
+          height: 160px;
+        }
+        .resources {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px 20px;
         }
       }
       /* A desktop desk fills the viewport; debugging remains below it and scrollable. */
@@ -679,7 +688,7 @@ HTML = r'''
             <section
               id="resources"
               class="resources"
-              aria-label="Host resource usage"
+              aria-label="System resource usage"
               hidden
             >
               <div class="resource">
@@ -707,6 +716,22 @@ HTML = r'''
                   hidden
                 ></meter>
                 <div class="status" id="memoryDetail">Used / total RAM</div>
+              </div>
+              <div
+                class="resource"
+                title="Received traffic in the container's network namespace; host traffic with host networking or native mode"
+              >
+                <h2>Network in</h2>
+                <strong id="networkIn">Measuring…</strong>
+                <div class="status">Received · Mbps</div>
+              </div>
+              <div
+                class="resource"
+                title="Sent traffic in the container's network namespace; host traffic with host networking or native mode"
+              >
+                <h2>Network out</h2>
+                <strong id="networkOut">Measuring…</strong>
+                <div class="status">Sent · Mbps</div>
               </div>
             </section>
           </div>
@@ -799,15 +824,18 @@ HTML = r'''
           ),
         );
         const protocol = c.protocol || new URL(c.url).protocol.slice(0, -1);
-        const unverified = protocol === "https" && c.tls_verification_enabled === false;
+        const unverified =
+          protocol === "https" && c.tls_verification_enabled === false;
         const transport = node(
           "span",
           "transport-badge " + protocol + (unverified ? " unverified" : ""),
           protocol.toUpperCase() + (unverified ? " · unverified" : ""),
         );
-        transport.title = protocol === "https"
-          ? "HTTPS configured; certificate verification " + (unverified ? "disabled" : "enabled")
-          : "HTTP configured; connection is not encrypted";
+        transport.title =
+          protocol === "https"
+            ? "HTTPS configured; certificate verification " +
+              (unverified ? "disabled" : "enabled")
+            : "HTTP configured; connection is not encrypted";
         transport.setAttribute("aria-label", transport.title);
         const connectionStatus = node("div", "connection-status");
         connectionStatus.append(state, transport);
@@ -816,7 +844,10 @@ HTML = r'''
         cameraLink.href = c.url;
         cameraLink.target = "_blank";
         cameraLink.rel = "noopener noreferrer";
-        cameraLink.setAttribute("aria-label", "Open " + c.name + " camera web interface");
+        cameraLink.setAttribute(
+          "aria-label",
+          "Open " + c.name + " camera web interface",
+        );
         address.append(cameraLink);
         box.append(connectionStatus, address);
         const activity = node(
@@ -1035,6 +1066,15 @@ HTML = r'''
             formatBytes(memory.total_bytes) +
             " RAM"
           : "Memory statistics unavailable";
+        const network = system?.network;
+        const networkFallback =
+          system?.network_status === "measuring" ? "Measuring…" : "Unavailable";
+        $("networkIn").textContent = Number.isFinite(network?.rx_mbps)
+          ? network.rx_mbps.toFixed(2) + " Mbps"
+          : networkFallback;
+        $("networkOut").textContent = Number.isFinite(network?.tx_mbps)
+          ? network.tx_mbps.toFixed(2) + " Mbps"
+          : networkFallback;
       }
       async function status() {
         try {

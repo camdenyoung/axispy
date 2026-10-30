@@ -78,14 +78,16 @@ class LiveLogs(logging.Handler):
 
 
 class HostUsage:
-    """Nonblocking Linux host metrics, cached across dashboard viewers for 1s."""
+    """Host CPU/RAM and network-namespace traffic, cached across viewers for 1s."""
     def __init__(self, proc_root="/proc", clock=None):
         self.proc_root = Path(proc_root)
         self.clock = clock or time.monotonic
         self.guard = threading.Lock()
         self.sample_at = None
         self.previous_cpu = None
-        self.values = dict(cpu_percent=None, cpu_status="unavailable", memory=None)
+        self.previous_network = None
+        self.values = dict(cpu_percent=None, cpu_status="unavailable", memory=None,
+                           network=None, network_status="unavailable")
 
     def snapshot(self):
         with self.guard:
@@ -94,7 +96,10 @@ class HostUsage:
                 self.sample_at = now
                 self._sample_cpu()
                 self._sample_memory()
-            return dict(self.values, memory=dict(self.values["memory"]) if self.values["memory"] else None)
+                self._sample_network(now)
+            return dict(self.values,
+                        memory=dict(self.values["memory"]) if self.values["memory"] else None,
+                        network=dict(self.values["network"]) if self.values["network"] else None)
 
     def _sample_cpu(self):
         try:
@@ -138,6 +143,52 @@ class HostUsage:
                                          percent=round(100 * used / total, 1))
         except (OSError, ValueError, KeyError):
             self.values["memory"] = None
+
+    def _sample_network(self, now):
+        try:
+            lines = (self.proc_root / "net" / "dev").read_text().splitlines()
+            if len(lines) < 2 or "Receive" not in lines[0] or "Transmit" not in lines[0]:
+                raise ValueError()
+            counters = {}
+            for line in lines[2:]:
+                if not line.strip():
+                    continue
+                interface, separator, raw = line.rpartition(":")
+                interface = interface.strip()
+                if not separator or not interface:
+                    raise ValueError()
+                if interface == "lo":
+                    continue
+                fields = raw.split()
+                if len(fields) < 16:
+                    raise ValueError()
+                received, sent = int(fields[0]), int(fields[8])
+                if received < 0 or sent < 0:
+                    raise ValueError()
+                counters[interface] = (received, sent)
+            previous = self.previous_network
+            self.previous_network = (now, counters)
+            self.values.update(network=None, network_status="measuring")
+            if previous is None or now <= previous[0]:
+                return
+            received = sent = valid = 0
+            for interface, (rx, tx) in counters.items():
+                old = previous[1].get(interface)
+                # New/recreated interfaces get a baseline instead of a spike.
+                if old is None or rx < old[0] or tx < old[1]:
+                    continue
+                received += rx - old[0]
+                sent += tx - old[1]
+                valid += 1
+            if counters and not valid:
+                return
+            elapsed = now - previous[0]
+            self.values.update(network=dict(rx_mbps=round(received * 8 / elapsed / 1_000_000, 2),
+                                             tx_mbps=round(sent * 8 / elapsed / 1_000_000, 2)),
+                               network_status="ok")
+        except (OSError, ValueError):
+            self.previous_network = None
+            self.values.update(network=None, network_status="unavailable")
 
 
 class Dashboard:

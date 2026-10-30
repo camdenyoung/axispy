@@ -666,3 +666,22 @@ def test_camera_connection_configuration_in_status(web_config, url, verify, prot
     assert state['tls_verification_enabled'] is enabled
     assert state['url'] == url
     assert 'private-example-password' not in json.dumps(state)
+
+
+def test_network_rates_in_status_api(running_dashboard, monkeypatch, tmp_path):
+    from axispy_web import HostUsage
+    dashboard, _, _ = running_dashboard
+    clock = [0.]
+    (tmp_path / 'net').mkdir()
+    def counters(rx, tx):
+        fields = [0] * 16
+        fields[0], fields[8] = rx, tx
+        (tmp_path / 'net' / 'dev').write_text('Inter-| Receive | Transmit\nheader\neth0: ' + ' '.join(map(str, fields)) + '\n')
+    counters(0, 0)
+    monkeypatch.setattr(dashboard, 'host_usage', HostUsage(tmp_path, clock=lambda: clock[0]))
+    assert get(dashboard, '/api/status').json()['system']['network_status'] == 'measuring'
+    counters(125000, 250000)
+    clock[0] = 1.
+    system = get(dashboard, '/api/status').json()['system']
+    assert system['network'] == {'rx_mbps': 1.0, 'tx_mbps': 2.0}
+    assert system['network_status'] == 'ok'

@@ -183,3 +183,11 @@ This adds up to one idle query per second per HTTPS camera, separate from web
 health checks and video. Dashboard/video sessions remain separate. Explicit
 unverified-HTTPS warnings are shown once per host rather than for every idle
 query; certificate verification remains enabled unless disabled per camera.
+
+## Dashboard network usage
+
+System usage includes **Network in** and **Network out** in Mbps. In the supplied
+Docker bridge deployment these measure container traffic, while CPU and memory
+remain host metrics. Native or host-network deployments show host network traffic.
+The existing Show/Hide system usage preference controls all four readings. See
+[WEB_DASHBOARD.md](WEB_DASHBOARD.md#container-network-traffic) for scope and sampling.

@@ -240,3 +240,34 @@ The camera address links to that camera's own web interface in a new tab using
 its configured HTTP/HTTPS URL, without adding credentials. The browser needs
 direct network access to the camera and handles its own login/certificate trust;
 the application's `VERIFY_TLS=false` setting does not bypass browser warnings.
+
+## Container network traffic
+
+**Network in** and **Network out** appear with CPU and memory under the existing
+system-usage toggle. They show received and sent traffic in **Mbps** (megabits
+per second), averaged over the interval between samples. They are rates, not
+cumulative transfer totals or a percentage of link capacity. No `.env` setting,
+extra dependency, container privilege, or mount is required.
+
+The counters come from `/proc/net/dev` and cover non-loopback interfaces in the
+application's network namespace. With the supplied Compose file's standard bridge
+networking, this measures traffic into and out of the **container**, including
+camera streams, dashboard viewers, control requests and other container traffic.
+CPU and memory readings still describe the Linux host. In native mode or Docker
+host-network mode, network readings also describe the host; they cannot isolate
+one application's traffic in a shared host namespace. Additional tunnel/virtual
+interfaces can affect aggregated totals.
+
+Samples are cached for one second across viewers. The first reading displays
+**Measuring…**; unreadable counters display **Unavailable**. New or reset interface
+counters establish a fresh baseline instead of producing a traffic spike. Clearing
+a connection does not reset the cumulative counters; the display continues to
+measure current receive/transmit rates. Multiple viewers increase outgoing
+traffic, and the current one-stream-per-camera-per-viewer relay can also increase
+incoming traffic.
+
+Optional browser check:
+
+```sh
+python tests/browser_network_usage.py
+```
