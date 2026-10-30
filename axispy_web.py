@@ -1,6 +1,5 @@
 """Read-only dashboard, independent VAPIX status probes, and bounded live logs."""
 from collections import deque
-from datetime import datetime, timezone
 import errno
 from http.client import RemoteDisconnected
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,12 +16,12 @@ from urllib.parse import parse_qs, quote, quote_plus, urlsplit
 import requests
 from requests.auth import HTTPDigestAuth
 
-from axispy import camera_tls_verify
+from axispy import camera_tls_verify, local_timestamp
 from axispy_ui import HTML
 
 
 def timestamp():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return local_timestamp()
 
 
 def request_failure_reason(exc):
@@ -68,7 +67,7 @@ class LiveLogs(logging.Handler):
             message = message.replace(password, "[redacted]")
         with self.guard:
             self.sequence += 1
-            self.records.append(dict(id=self.sequence, time=datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="seconds"), level=record.levelname, message=message))
+            self.records.append(dict(id=self.sequence, time=local_timestamp(record.created), level=record.levelname, message=message))
 
     def since(self, after):
         with self.guard:
@@ -268,7 +267,7 @@ class Dashboard:
     def snapshot(self):
         usage = self.host_usage.snapshot()
         with self.guard:
-            return dict(system=usage, version="0.2.12", time=timestamp(), selected=self.controller.selected,
+            return dict(system=usage, version="0.2.13", time=timestamp(), selected=self.controller.selected,
                         poll_interval_ms=self.poll_interval_ms, preview_fps=self.preview_fps,
                         preview_quality=self.preview_quality, preview_resolution=self.preview_resolution,
                         armed=bool(self.controller.armed and self.joystick is not None), joystick=self.joystick,

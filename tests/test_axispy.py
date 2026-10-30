@@ -918,7 +918,7 @@ def test_custom_hold_duration_threshold_and_repeat(duration):
     assert holds.update({0}, 100 + duration) == [0]
 
 
-def test_persistent_file_logs_append_with_utc_timestamps(tmp_path, monkeypatch, caplog):
+def test_persistent_file_logs_append_with_local_timestamps(tmp_path, monkeypatch, caplog):
     import axispy
     path = tmp_path / 'logs' / 'axispy.log'
     monkeypatch.setenv('AXIS_LOG_FILE', str(path))
@@ -930,8 +930,8 @@ def test_persistent_file_logs_append_with_utc_timestamps(tmp_path, monkeypatch, 
             axispy.LOG.removeHandler(handler)
             handler.close()
     text = path.read_text()
-    assert 'Z INFO: first run' in text
-    assert 'Z INFO: second run' in text
+    assert ' INFO: first run' in text
+    assert ' INFO: second run' in text
     assert 'second run' in caplog.text  # Console/root handlers still receive logs.
 
 
