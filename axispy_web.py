@@ -1,6 +1,5 @@
 """Read-only dashboard, independent VAPIX status probes, and bounded live logs."""
 from collections import deque
-from datetime import datetime, timezone
 import errno
 from http.client import RemoteDisconnected
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,12 +16,12 @@ from urllib.parse import parse_qs, quote, quote_plus, urlsplit
 import requests
 from requests.auth import HTTPDigestAuth
 
-from axispy import camera_tls_verify
+from axispy import camera_tls_verify, local_timestamp
 from axispy_ui import HTML
 
 
 def timestamp():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return local_timestamp()
 
 
 def request_failure_reason(exc):
@@ -68,7 +67,7 @@ class LiveLogs(logging.Handler):
             message = message.replace(password, "[redacted]")
         with self.guard:
             self.sequence += 1
-            self.records.append(dict(id=self.sequence, time=datetime.fromtimestamp(record.created, timezone.utc).isoformat(timespec="seconds"), level=record.levelname, message=message))
+            self.records.append(dict(id=self.sequence, time=local_timestamp(record.created), level=record.levelname, message=message))
 
     def since(self, after):
         with self.guard:

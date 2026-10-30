@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import Future
+from datetime import datetime
 import logging
 from logging.handlers import RotatingFileHandler
 import math
@@ -857,6 +858,17 @@ def diagnose_camera(settings, slot):
     return True
 
 
+def local_timestamp(created=None):
+    """Format local time with its UTC offset, including daylight saving rules."""
+    value = datetime.now() if created is None else datetime.fromtimestamp(created)
+    return value.astimezone().isoformat(timespec="seconds")
+
+
+class LocalTimeFormatter(logging.Formatter):
+    def formatTime(self, record, datefmt=None):
+        return local_timestamp(record.created)
+
+
 def configure_file_logging():
     """Optionally mirror application logs to a bounded, persistent UTF-8 file."""
     path = os.environ.get("AXIS_LOG_FILE", "").strip()
@@ -869,8 +881,7 @@ def configure_file_logging():
     target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(target, maxBytes=max_bytes, backupCount=backups, encoding="utf-8")
-    formatter = logging.Formatter("%(asctime)sZ %(levelname)s: %(message)s", datefmt="%Y-%m-%dT%H:%M:%S")
-    formatter.converter = time.gmtime
+    formatter = LocalTimeFormatter("%(asctime)s %(levelname)s: %(message)s")
     handler.setFormatter(formatter)
     LOG.addHandler(handler)
     LOG.setLevel(logging.INFO)
