@@ -640,7 +640,7 @@ HTML = r'''
             <h1>
               axis<span>py</span>PTZ
               <small class="muted" style="font-size: 13px; letter-spacing: 0"
-                >v0.2.9</small
+                >v0.2.10</small
               >
             </h1>
             <p class="eyebrow">Camera control desk</p>
