@@ -1,4 +1,5 @@
 import json
+import re
 import errno
 import logging
 import threading
@@ -470,7 +471,7 @@ def test_dashboard_with_nonconsecutive_enabled_slots(monkeypatch):
         assert data['cameras'][1]['selected'] is True
         assert 'test-only' not in get(dashboard, '/api/status').text
         html = get(dashboard, '/').text
-        assert "'J'+c.slot" in html
+        assert re.search(r"[\"']J[\"']\s*\+\s*c\.slot", html)
     finally:
         dashboard.stop()
         for camera in cameras:
@@ -479,8 +480,8 @@ def test_dashboard_with_nonconsecutive_enabled_slots(monkeypatch):
 
 def test_release_version_in_status_and_dashboard(running_dashboard):
     dashboard, _, _ = running_dashboard
-    assert get(dashboard, '/api/status').json()['version'] == '0.2.9'
-    assert 'v0.2.9</small>' in get(dashboard, '/').text
+    assert get(dashboard, '/api/status').json()['version'] == '0.2.10'
+    assert 'v0.2.10</small>' in ''.join(get(dashboard, '/').text.split())
 
 
 @pytest.fixture
